@@ -56,9 +56,9 @@ std::optional<std::wstring> VdaSession::AddVirtualDisplay(const GUID& guid, cons
     auto name_utf8 = wstringToUtf8(deviceName);
 
     // Use conservative defaults; callers may extend API later to pass resolution/fps.
-    uint32_t width = 1920;
-    uint32_t height = 1080;
-    uint32_t fps = 60;
+    uint32_t width = 2560;
+    uint32_t height = 1600;
+    float fps = 60.0f;
 
     auto dev = VDISPLAY::createVirtualDisplay(client_uid.c_str(), name_utf8.c_str(), width, height, fps, guid);
     if (dev.empty()) {

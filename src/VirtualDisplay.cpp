@@ -654,7 +654,7 @@ std::wstring createVirtualDisplay(
 	const char* s_client_name,
 	uint32_t width,
 	uint32_t height,
-	uint32_t fps,
+	float fps,
 	const GUID& guid
 ) {
 	if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
@@ -662,7 +662,9 @@ std::wstring createVirtualDisplay(
 	}
 
 	VIRTUAL_DISPLAY_ADD_OUT output;
-	if (!AddVirtualDisplay(SUDOVDA_DRIVER_HANDLE, width, height, fps, guid, s_client_name, s_client_uid, output)) {
+    UINT refresh_millihz = static_cast<UINT>(fps * 1000.0f + 0.5f);
+
+    if (!AddVirtualDisplay(SUDOVDA_DRIVER_HANDLE, width, height, refresh_millihz, guid, s_client_name, s_client_uid, output)) {
 		printf("[SUDOVDA] Failed to add virtual display.\n");
 		return std::wstring();
 	}
@@ -678,8 +680,10 @@ std::wstring createVirtualDisplay(
 		retryInterval *= 2;
 	}
 
-	wprintf(L"[SUDOVDA] Virtual display added successfully: %ls\n", deviceName);
-	printf("[SUDOVDA] Configuration: W: %d, H: %d, FPS: %d\n", width, height, fps);
+    wprintf(L"[SUDOVDA] Virtual display added successfully: %ls\n", deviceName);
+    // Print the effective FPS as a floating point value reconstructed from
+    // millihertz for clarity.
+    printf("[SUDOVDA] Configuration: W: %d, H: %d, FPS: %.3f\n", width, height, static_cast<double>(refresh_millihz) / 1000.0);
 
 	return std::wstring(deviceName);
 }

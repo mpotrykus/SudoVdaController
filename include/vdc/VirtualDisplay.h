@@ -40,7 +40,7 @@ namespace VDISPLAY {
 		const char* s_client_name,
 		uint32_t width,
 		uint32_t height,
-		uint32_t fps,
+		float fps,
 		const GUID& guid
 	);
 	bool removeVirtualDisplay(const GUID& guid);
