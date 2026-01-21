@@ -13,7 +13,10 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{6A1E7E62-8F93-4C29-ABF1-1A2D3E4F5A67}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>VirtualDisplayController</RootNamespace>
+    <RootNamespace>SudoVdaController</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup>
+    <AssemblyName>SudoVdaController</AssemblyName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
