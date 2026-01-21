@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="SudoVdaController/SudoVdaController.vcxproj" Id="769b084c-b03c-4172-9c63-b0923ad33f0a" />
+</Solution>
