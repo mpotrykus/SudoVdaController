@@ -1,0 +1,24 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.2.11408.102
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VirtualDisplayController", "VirtualDisplayController.vcxproj", "{6A1E7E62-8F93-4C29-ABF1-1A2D3E4F5A67}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6A1E7E62-8F93-4C29-ABF1-1A2D3E4F5A67}.Debug|x64.ActiveCfg = Debug|x64
+		{6A1E7E62-8F93-4C29-ABF1-1A2D3E4F5A67}.Debug|x64.Build.0 = Debug|x64
+		{6A1E7E62-8F93-4C29-ABF1-1A2D3E4F5A67}.Release|x64.ActiveCfg = Release|x64
+		{6A1E7E62-8F93-4C29-ABF1-1A2D3E4F5A67}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {7FE8B826-1E1F-407E-9077-0D79A8289010}
+	EndGlobalSection
+EndGlobal
