@@ -45,7 +45,7 @@ bool VdaSession::Open() {
     return st == VDISPLAY::DRIVER_STATUS::OK;
 }
 
-std::optional<std::wstring> VdaSession::AddVirtualDisplay(const GUID& guid, const std::wstring& deviceName) {
+std::optional<std::wstring> VdaSession::AddVirtualDisplay(const GUID& guid, const VirtualDisplayConfig& cfg) {
     if (!Open()) return std::nullopt;
 
     auto client_uid = guidToString(guid);
@@ -53,14 +53,10 @@ std::optional<std::wstring> VdaSession::AddVirtualDisplay(const GUID& guid, cons
         std::cerr << "[VdaSession] Failed to stringify GUID\n";
         return std::nullopt;
     }
-    auto name_utf8 = wstringToUtf8(deviceName);
 
-    // Use conservative defaults; callers may extend API later to pass resolution/fps.
-    uint32_t width = 2560;
-    uint32_t height = 1600;
-    float fps = 60.0f;
-
-    auto dev = VDISPLAY::createVirtualDisplay(client_uid.c_str(), name_utf8.c_str(), width, height, fps, guid);
+    auto name_utf8 = wstringToUtf8(cfg.deviceName);
+	auto refreshRate = static_cast<float>(cfg.refreshRateMilliHz) / 1000.0f;
+    auto dev = VDISPLAY::createVirtualDisplay(client_uid.c_str(), name_utf8.c_str(), cfg.width, cfg.height, refreshRate, guid);
     if (dev.empty()) {
         std::cerr << "[VdaSession] createVirtualDisplay failed\n";
         return std::nullopt;

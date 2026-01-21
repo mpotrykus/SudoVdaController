@@ -663,7 +663,7 @@ std::wstring createVirtualDisplay(
 
 	VIRTUAL_DISPLAY_ADD_OUT output;
     UINT refresh_millihz = static_cast<UINT>(fps * 1000.0f + 0.5f);
-
+	
     if (!AddVirtualDisplay(SUDOVDA_DRIVER_HANDLE, width, height, refresh_millihz, guid, s_client_name, s_client_uid, output)) {
 		printf("[SUDOVDA] Failed to add virtual display.\n");
 		return std::wstring();
@@ -683,7 +683,7 @@ std::wstring createVirtualDisplay(
     wprintf(L"[SUDOVDA] Virtual display added successfully: %ls\n", deviceName);
     // Print the effective FPS as a floating point value reconstructed from
     // millihertz for clarity.
-    printf("[SUDOVDA] Configuration: W: %d, H: %d, FPS: %.3f\n", width, height, static_cast<double>(refresh_millihz) / 1000.0);
+    printf("[SUDOVDA] Configuration: W: %d, H: %d, FPS: %.2f\n", width, height, static_cast<float>(refresh_millihz) / 1000.0);
 
 	return std::wstring(deviceName);
 }

@@ -3,6 +3,7 @@
 #include <string>
 #include <optional>
 #include <windows.h>
+#include "VirtualDisplayConfig.h"
 
 namespace vdc {
 
@@ -12,7 +13,7 @@ public:
     ~VdaSession();
 
     bool Open(); // open driver handle
-    std::optional<std::wstring> AddVirtualDisplay(const GUID& guid, const std::wstring& deviceName);
+    std::optional<std::wstring> AddVirtualDisplay(const GUID& guid, const VirtualDisplayConfig& config);
     bool RemoveVirtualDisplay(const GUID& guid);
     bool SetRenderAdapter(const GUID& guid, uint64_t adapterLuid);
 

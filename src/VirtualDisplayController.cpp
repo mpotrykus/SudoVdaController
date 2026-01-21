@@ -7,6 +7,12 @@
 #include "DisplayConfigUtils.h"
 #include "HdrUtils.h"
 
+#include <thread>
+#include <chrono>
+#include <iostream>
+#include <locale>
+#include <codecvt>
+
 using namespace vdc;
 using namespace vdisplay;
 
@@ -20,13 +26,24 @@ VirtualDisplayController::~VirtualDisplayController() = default;
 ControllerResult VirtualDisplayController::CreateDisplay(const VirtualDisplayConfig& cfg, const std::optional<GUID>& guidOpt) {
     GUID g = guidOpt.value_or(GenerateGuid());
     // Ask VDA to add display (stub behavior)
-    auto deviceName = vda_->AddVirtualDisplay(g, cfg.deviceName);
+    auto deviceName = vda_->AddVirtualDisplay(g, cfg);
     JsonBuilder jb;
     if (!deviceName) {
         jb.Add("error", "failed to add virtual display");
         return { false, "failed", jb.Build() };
     }
+
+    // Create the session object
     auto session = std::make_unique<vdisplay::VirtualDisplaySession>(g, *deviceName, cfg);
+
+    // If the config requested HDR, try to enable it now.
+    if (cfg.hdr && !session->SetHdr(true)) {
+        std::string devUtf8 = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(*deviceName);
+        std::cerr << "[Controller] WARNING: failed to enable HDR on device: " << devUtf8 << "\n";
+        jb.Add("warning", "failed to enable hdr on device");
+    }
+
+    // Store session
     sessions_.emplace(g, std::move(session));
     jb.Add("guid", GuidToString(g));
     jb.Add("device", std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(*deviceName));

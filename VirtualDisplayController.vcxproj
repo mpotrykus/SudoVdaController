@@ -13,10 +13,10 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{6A1E7E62-8F93-4C29-ABF1-1A2D3E4F5A67}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>SudoVdaController</RootNamespace>
+    <RootNamespace>VirtualDisplayController</RootNamespace>
   </PropertyGroup>
   <PropertyGroup>
-    <AssemblyName>SudoVdaController</AssemblyName>
+    <AssemblyName>VirtualDisplayController</AssemblyName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
@@ -96,6 +96,7 @@
     <ClInclude Include="include\vdc\VirtualDisplayTypes.h" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="cpp src\main.cpp" />
     <Content Include="include\vdc\CliParser.h" />
     <Content Include="include\vdc\GuidUtils.h" />
     <Content Include="include\vdc\Json.h" />

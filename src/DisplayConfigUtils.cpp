@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#include <cstdint>
 
 using namespace vdc;
 using namespace vdisplay;
@@ -12,6 +13,66 @@ using namespace vdisplay;
 std::optional<DisplayMode> DisplayConfigUtils::GetCurrentModeForDevice(const std::wstring& deviceName) {
     if (deviceName.empty()) return std::nullopt;
 
+    // Try QueryDisplayConfig first to obtain exact rational refresh rate (supports fractional)
+    UINT32 pathCount = 0;
+    UINT32 modeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) == ERROR_SUCCESS) {
+        std::vector<DISPLAYCONFIG_PATH_INFO> pathArray(pathCount);
+        std::vector<DISPLAYCONFIG_MODE_INFO> modeArray(modeCount);
+
+        if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, pathArray.data(), &modeCount, modeArray.data(), nullptr) == ERROR_SUCCESS) {
+            for (UINT32 i = 0; i < pathCount; ++i) {
+                DISPLAYCONFIG_SOURCE_DEVICE_NAME sourceName = {};
+                sourceName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                sourceName.header.size = sizeof(sourceName);
+                sourceName.header.adapterId = pathArray[i].sourceInfo.adapterId;
+                sourceName.header.id = pathArray[i].sourceInfo.id;
+
+                if (DisplayConfigGetDeviceInfo(&sourceName.header) != ERROR_SUCCESS) {
+                    continue;
+                }
+
+                if (std::wstring_view(sourceName.viewGdiDeviceName) == deviceName) {
+                    auto* sourceInfo = &pathArray[i].sourceInfo;
+                    auto* targetInfo = &pathArray[i].targetInfo;
+
+                    // find the matching source mode in modeArray to get width/height
+                    for (UINT32 j = 0; j < modeCount; ++j) {
+                        if (modeArray[j].infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE &&
+                            modeArray[j].adapterId.HighPart == sourceInfo->adapterId.HighPart &&
+                            modeArray[j].adapterId.LowPart == sourceInfo->adapterId.LowPart &&
+                            modeArray[j].id == sourceInfo->id) {
+
+                            auto* sourceMode = &modeArray[j].sourceMode;
+
+                            // targetInfo->refreshRate is a DISPLAYCONFIG_RATIONAL (Numerator/Denominator)
+                            uint64_t numer = 0;
+                            uint64_t denom = 1;
+#if defined(_MSC_VER)
+                            // field name differs by SDK, try common names
+                            numer = targetInfo->refreshRate.Numerator;
+                            denom = targetInfo->refreshRate.Denominator ? targetInfo->refreshRate.Denominator : 1;
+#else
+                            numer = targetInfo->refreshRate.Numerator;
+                            denom = targetInfo->refreshRate.Denominator ? targetInfo->refreshRate.Denominator : 1;
+#endif
+
+                            // milliHz = (numerator / denominator) * 1000
+                            uint64_t refreshMilliHz = (numer * 1000ULL) / denom;
+
+                            return DisplayMode{
+                                static_cast<int>(sourceMode->width),
+                                static_cast<int>(sourceMode->height),
+                                static_cast<int>(refreshMilliHz)
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: EnumDisplaySettingsW returns integer Hz only (fractional precision lost)
     DEVMODEW devMode{};
     devMode.dmSize = sizeof(devMode);
 
@@ -19,9 +80,12 @@ std::optional<DisplayMode> DisplayConfigUtils::GetCurrentModeForDevice(const std
         return std::nullopt;
     }
 
-    // dmDisplayFrequency is in Hz (integer). Convert to milliHz.
     int refreshMilliHz = (devMode.dmDisplayFrequency > 0) ? (devMode.dmDisplayFrequency * 1000) : 60000;
-    return DisplayMode{static_cast<int>(devMode.dmPelsWidth), static_cast<int>(devMode.dmPelsHeight), refreshMilliHz};
+    return DisplayMode{
+        static_cast<int>(devMode.dmPelsWidth),
+        static_cast<int>(devMode.dmPelsHeight),
+        refreshMilliHz
+    };
 }
 
 bool DisplayConfigUtils::ApplyModeForDevice(const std::wstring& deviceName, int w, int h, int refreshMilliHz, bool isolatedLayout) {
