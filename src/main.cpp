@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
         if (arg == "--help" || arg == "-h" || arg == "help") {
-            std::cout << "Usage: VirtualDisplayController <verb> [args]\n";
+            std::cout << "Usage: SudoVdaController <verb> [args]\n";
             std::cout << "Verbs:\n";
             std::cout << "Verbs:\n";
             std::cout << "  create [name]                       Create a virtual display (optional UTF-8 name)\n";
@@ -37,9 +37,9 @@ int main(int argc, char** argv) {
             std::cout << "  --help, -h                          Show this help message\n";
             std::cout << "  --stay                              For 'create', keep process alive so device stays present\n";
             std::cout << "Examples:\n";
-            std::cout << "  VirtualDisplayController create \"My Display\"\n";
-            std::cout << "  VirtualDisplayController create \"My Display\" --stay\n";
-            std::cout << "  VirtualDisplayController remove 01234567-89ab-cdef-0123-456789abcdef\n";
+            std::cout << "  SudoVdaController create \"My Display\"\n";
+            std::cout << "  SudoVdaController create \"My Display\" --stay\n";
+            std::cout << "  SudoVdaController remove 01234567-89ab-cdef-0123-456789abcdef\n";
             return 0;
         }
         if (arg == "--stay") {
