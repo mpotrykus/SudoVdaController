@@ -3,7 +3,7 @@
 #include <string>
 #include <optional>
 #include <windows.h>
-#include "VirtualDisplayConfig.h"
+#include "../models/VirtualDisplayConfig.h"
 
 namespace vdc {
 

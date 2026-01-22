@@ -1,11 +1,11 @@
-#include "pch.h"
+#include "../pch.h"
 #include "VirtualDisplayController.h"
-#include "Json.h"
-#include "GuidUtils.h"
+#include "../utils/JsonUtils.h"
+#include "../utils/GuidUtils.h"
 #include "VdaSession.h"
 #include "VirtualDisplaySession.h"
-#include "DisplayConfigUtils.h"
-#include "HdrUtils.h"
+#include "../utils/DisplayConfigUtils.h"
+#include "../utils/HdrUtils.h"
 
 #include <thread>
 #include <chrono>
@@ -110,4 +110,17 @@ ControllerResult VirtualDisplayController::Query(const GUID& guid) {
     }
     jb.AddRaw("hdr", it->second->IsHdrEnabled() ? "true" : "false");
     return { true, "ok", jb.Build() };
+}
+
+size_t VirtualDisplayController::CountDisplays() const {
+    return sessions_.size();
+}
+
+std::vector<std::pair<GUID, std::wstring>> VirtualDisplayController::ListDisplays() const {
+    std::vector<std::pair<GUID, std::wstring>> out;
+    out.reserve(sessions_.size());
+    for (const auto& kv : sessions_) {
+        out.emplace_back(kv.first, kv.second->GetDeviceName());
+    }
+    return out;
 }

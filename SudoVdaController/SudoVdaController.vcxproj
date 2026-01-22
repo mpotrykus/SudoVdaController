@@ -19,30 +19,31 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="CliParser.h" />
-    <ClCompile Include="DisplayConfigUtils.cpp" />
-    <ClCompile Include="HdrUtils.cpp" />
+    <ClCompile Include="utils\CliParser.h" />
+    <ClCompile Include="utils\DisplayConfigUtils.cpp" />
+    <ClCompile Include="utils\HdrUtils.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="VdaSession.cpp" />
-    <ClCompile Include="VirtualDisplay.cpp" />
-    <ClCompile Include="VirtualDisplayController.cpp" />
-    <ClCompile Include="VirtualDisplaySession.cpp" />
-    <ClCompile Include="VirtualDisplayTypes.cpp" />
+    <ClCompile Include="controller\TrayServer.cpp" />
+    <ClCompile Include="controller\VdaSession.cpp" />
+    <ClCompile Include="controller\VirtualDisplay.cpp" />
+    <ClCompile Include="controller\VirtualDisplayController.cpp" />
+    <ClCompile Include="controller\VirtualDisplaySession.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="DisplayConfigUtils.h" />
-    <ClInclude Include="GuidUtils.h" />
-    <ClInclude Include="HdrUtils.h" />
-    <ClInclude Include="Json.h" />
+    <ClInclude Include="utils\DisplayConfigUtils.h" />
+    <ClInclude Include="utils\GuidUtils.h" />
+    <ClInclude Include="utils\HdrUtils.h" />
+    <ClInclude Include="utils\JsonUtils.h" />
     <ClInclude Include="pch.h" />
-    <ClInclude Include="VdaSession.h" />
-    <ClInclude Include="vendor\sudovda\sudovda-ioctl.h" />
-    <ClInclude Include="vendor\sudovda\sudovda.h" />
-    <ClInclude Include="VirtualDisplay.h" />
-    <ClInclude Include="VirtualDisplayConfig.h" />
-    <ClInclude Include="VirtualDisplayController.h" />
-    <ClInclude Include="VirtualDisplaySession.h" />
-    <ClInclude Include="VirtualDisplayTypes.h" />
+    <ClInclude Include="controller\TrayServer.h" />
+    <ClInclude Include="controller\VdaSession.h" />
+    <ClInclude Include="third_party\sudovda\sudovda-ioctl.h" />
+    <ClInclude Include="third_party\sudovda\sudovda.h" />
+    <ClInclude Include="controller\VirtualDisplay.h" />
+    <ClInclude Include="models\VirtualDisplayConfig.h" />
+    <ClInclude Include="controller\VirtualDisplayController.h" />
+    <ClInclude Include="controller\VirtualDisplaySession.h" />
+    <ClInclude Include="models\VirtualDisplayTypes.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>

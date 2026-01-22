@@ -1,7 +1,7 @@
-#include "pch.h"
+#include "../pch.h"
 // include vendor headers using project-relative path used in other sources
-#include "vendor/sudovda/sudovda-ioctl.h"
-#include "vendor/sudovda/sudovda.h"
+#include "../third_party/sudovda/sudovda-ioctl.h"
+#include "../third_party/sudovda/sudovda.h"
 #include "VirtualDisplay.h"
 
 #include <atomic>

@@ -3,8 +3,8 @@
 #include <string>
 #include <optional>
 #include <windows.h>
-#include "VirtualDisplayConfig.h"
-#include "VirtualDisplayTypes.h"
+#include "../models/VirtualDisplayConfig.h"
+#include "../models/VirtualDisplayTypes.h"
 
 namespace vdisplay {
 

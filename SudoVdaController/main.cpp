@@ -1,22 +1,116 @@
 #include "pch.h"
+
+#include "controller/VirtualDisplayController.h"
+#include "controller/TrayServer.h"
+#include "utils/CliParser.h"
+#include "utils/GuidUtils.h"
+#include "models/VirtualDisplayConfig.h"
+
 #include <iostream>
 #include <codecvt>
 #include <locale>
 #include <thread>
 #include <chrono>
-#include "CliParser.h"
-#include "VirtualDisplayController.h"
-#include "GuidUtils.h"
-#include "VirtualDisplayConfig.h"
+#include <sstream>
+#include <iomanip>
 
 using namespace vdc;
 
+static const std::wstring PIPE_NAME = L"SudoVdaTrayPipe";
+
+// percent-encode utf8
+static std::string PercentEncodeUtf8(const std::wstring& w) {
+    std::string u = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(w);
+    std::ostringstream oss;
+    for (unsigned char c : u) {
+        // safe characters: alnum and -_.~
+        if ( (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+             c == '-' || c == '_' || c == '.' || c == '~') {
+            oss << c;
+        } else if (c == ' ') {
+            oss << '+';
+        } else {
+            oss << '%' << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << int(c) << std::dec;
+        }
+    }
+    return oss.str();
+}
+
+static bool StartTrayProcessIfNeeded() {
+    // Attempt to connect briefly; if fails, create process with --tray
+    std::wstring pipePath = L"\\\\.\\pipe\\" + PIPE_NAME;
+    if (WaitNamedPipeW(pipePath.c_str(), 50)) return true;
+
+    // not ready -> start tray process
+    wchar_t exePath[MAX_PATH];
+    if (!GetModuleFileNameW(NULL, exePath, ARRAYSIZE(exePath))) return false;
+
+    std::wstring cmd = std::wstring(L"\"") + exePath + L"\" --tray";
+    
+    PROCESS_INFORMATION pi{};
+    STARTUPINFOW si{}; 
+    si.cb = sizeof(si);
+    BOOL ok = CreateProcessW(NULL, &cmd[0], NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    if (!ok) return false;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    // wait for pipe to appear
+    for (int i=0;i<40;i++) {
+        if (WaitNamedPipeW(pipePath.c_str(), 250)) return true;
+    }
+    return false;
+}
+
+static bool SendToTray(const std::string& message, std::string& outResponse) {
+    std::wstring fullPipe = L"\\\\.\\pipe\\" + PIPE_NAME;
+    // Ensure tray is running (start if needed) and wait until the pipe becomes available.
+    if (!StartTrayProcessIfNeeded()) return false;
+
+    HANDLE h = INVALID_HANDLE_VALUE;
+    const int maxAttempts = 40;
+    for (int attempt = 0; attempt < maxAttempts; ++attempt) {
+        h = CreateFileW(fullPipe.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+        if (h != INVALID_HANDLE_VALUE) break;
+        // brief backoff; allow the tray process to create the pipe
+        Sleep(100);
+    }
+    if (h == INVALID_HANDLE_VALUE) return false;
+
+    DWORD written = 0;
+    BOOL ok = WriteFile(h, message.c_str(), (DWORD)message.size(), &written, NULL);
+    if (!ok || written != message.size()) { CloseHandle(h); return false; }
+
+    // read response
+    char buf[8192];
+    DWORD read = 0;
+    ok = ReadFile(h, buf, (DWORD)sizeof(buf)-1, &read, NULL);
+    if (ok && read > 0) {
+        buf[read] = 0;
+        outResponse = std::string(buf);
+    } else {
+        outResponse.clear();
+    }
+
+    CloseHandle(h);
+    return true;
+}
+
 int main(int argc, char** argv) {
     (void)argc; (void)argv;
-    std::cout << "VirtualDisplayController starting...\n";
+    std::cout << "SudoVdaController starting...\n";
 
     // Optionally initialize COM for modules that expect it:
     EnsureComInitialized();
+
+    // If launched as tray process, run server loop
+    for (int i = 1; i < argc; ++i) {
+        std::string a(argv[i]);
+        if (a == "--tray") {
+            // run server (blocks)
+            return vdc::RunTrayServer(PIPE_NAME);
+        }
+    }
 
     // New: handle --help / -h / help before parsing and detect --stay
     bool keepAliveRequested = false;
@@ -53,7 +147,24 @@ int main(int argc, char** argv) {
     }
 
     auto cli = CliParser::Parse(argc, argv);
-    VirtualDisplayController controller;
+
+    // All commands are forwarded to the tray server which owns displays.
+    // Build a simple message format: verb\nkey=val&key2=val2...\n
+    auto send_kv = [&](const std::string& verb, const std::map<std::string,std::string>& kv) -> std::pair<bool,std::string> {
+        std::ostringstream msg;
+        msg << verb << "\n";
+        bool first = true;
+        for (const auto& p : kv) {
+            if (!first) msg << "&";
+            first = false;
+            msg << p.first << "=" << p.second;
+        }
+        std::string resp;
+        if (!SendToTray(msg.str(), resp)) {
+            return { false, std::string("{\"error\":\"failed to contact tray\"}") };
+        }
+        return { true, resp };
+    };
 
     if (cli.verb == "create") {
         VirtualDisplayConfig cfg;
@@ -140,111 +251,128 @@ int main(int argc, char** argv) {
             }
         }
 
-        auto res = controller.CreateDisplay(cfg, guidOpt);
-        std::cout << res.json << std::endl;
-        if (!res.success) {
-            // Always print error JSON and exit with code 1
-            std::cerr << res.json << std::endl;
-            return 1;
-        }
+        // Build kv map and send to tray
+        std::map<std::string,std::string> kv;
+        kv["deviceName"] = PercentEncodeUtf8(cfg.deviceName);
+        kv["width"] = std::to_string(cfg.width);
+        kv["height"] = std::to_string(cfg.height);
+        kv["refresh"] = std::to_string(cfg.refreshRateMilliHz);
+        kv["hdr"] = cfg.hdr ? "1" : "0";
+        if (cfg.adapterLuid) kv["adapter"] = std::to_string(cfg.adapterLuid);
+        if (guidOpt) kv["guid"] = vdc::GuidToString(*guidOpt);
 
-        // Verify creation by extracting the guid from the response and querying it.
-        std::string guidStr;
-        const std::string key = "\"guid\":\"";
-        auto pos = res.json.find(key);
-        if (pos != std::string::npos) {
-            auto start = pos + key.size();
-            auto end = res.json.find('"', start);
-            if (end != std::string::npos && end > start) {
-                guidStr = res.json.substr(start, end - start);
+        auto res = send_kv("create", kv);
+        std::cout << res.second << std::endl;
+
+        // If we couldn't contact the tray, fall back to creating locally so the command still works.
+        if (!res.first) {
+            VirtualDisplayController localController;
+            auto localRes = localController.CreateDisplay(cfg, guidOpt);
+            std::cout << localRes.json << std::endl;
+            if (!localRes.success) {
+                std::cerr << localRes.json << std::endl;
+                return 1;
             }
-        }
-        if (guidStr.empty()) {
-            std::cerr << "{\"error\":\"create returned no guid to verify\"}\n";
-            return 1;
-        }
-
-        auto g = vdc::StringToGuid(guidStr);
-        if (!g) {
-            std::cerr << "{\"error\":\"invalid guid returned from create\"}\n";
-            return 1;
-        }
-
-        // Retry querying a few times to allow the device to become available.
-        const int maxRetries = 10;
-        const auto delay = std::chrono::milliseconds(200);
-        bool verified = false;
-        for (int i = 0; i < maxRetries; ++i) {
-            auto qres = controller.Query(*g);
-            if (qres.success) {
-                std::cout << qres.json << std::endl;
-                verified = true;
-                break;
+            // extract guid and verify
+            std::string guidStr;
+            const std::string key = "\"guid\":\"";
+            auto pos = localRes.json.find(key);
+            if (pos != std::string::npos) {
+                auto start = pos + key.size();
+                auto end = localRes.json.find('"', start);
+                if (end != std::string::npos && end > start) guidStr = localRes.json.substr(start, end - start);
             }
-            std::this_thread::sleep_for(delay);
-        }
-        if (!verified) {
-            std::cerr << "{\"error\":\"create verification failed: device not found after retries\"}\n";
-            return 1;
+            if (!guidStr.empty()) {
+                auto g = vdc::StringToGuid(guidStr);
+                if (g) {
+                    const int maxRetries = 10;
+                    const auto delay = std::chrono::milliseconds(200);
+                    bool verified = false;
+                    for (int i = 0; i < maxRetries; ++i) {
+                        auto qres = localController.Query(*g);
+                        if (qres.success) { std::cout << qres.json << std::endl; verified = true; break; }
+                        std::this_thread::sleep_for(delay);
+                    }
+                    if (!verified) {
+                        std::cerr << "{\"error\":\"create verification failed: device not found after retries\"}\n";
+                        return 1;
+                    }
+                }
+            }
+
+            if (keepAliveRequested) {
+                std::cout << "Created locally; press Enter to exit client (display will be removed on exit).\n";
+                std::string dummy; std::getline(std::cin, dummy);
+            }
+
+            return 0;
         }
 
-        // If user requested to keep the process alive, block here while the controller object remains alive.
+        // If user requested to keep-alive, wait for Enter (tray owns the display)
         if (keepAliveRequested) {
-            std::cout << "Keeping process alive to retain the created display. Press Enter to exit (or Ctrl+C).\n";
-            // Keep controller in scope and block; Ctrl+C will terminate process and clean up.
-            std::string dummy;
-            std::getline(std::cin, dummy);
+            std::cout << "create request sent to tray; press Enter to exit client.\n";
+            std::string dummy; std::getline(std::cin, dummy);
         }
-
         return 0;
     }
 
     if (cli.verb == "remove" && cli.args.size() >= 1) {
-        auto g = vdc::StringToGuid(cli.args[0]);
-        if (!g) { std::cout << "{\"error\":\"invalid guid\"}\n"; return 2; }
-        auto res = controller.RemoveDisplay(*g);
-        std::cout << res.json << std::endl;
-        return res.success ? 0 : 1;
+        std::map<std::string,std::string> kv;
+        kv["guid"] = cli.args[0];
+        auto res = send_kv("remove", kv);
+        std::cout << res.second << std::endl;
+
+        // fallback: try remove locally when tray not reachable
+        if (!res.first) {
+            auto g = vdc::StringToGuid(cli.args[0]);
+            if (!g) { std::cout << "{\"error\":\"invalid guid\"}\n"; return 2; }
+            VirtualDisplayController localController;
+            auto localRes = localController.RemoveDisplay(*g);
+            std::cout << localRes.json << std::endl;
+            return localRes.success ? 0 : 1;
+        }
+
+        return res.first ? 0 : 1;
     }
 
     if (cli.verb == "mode" && cli.args.size() >= 5) {
-        auto g = vdc::StringToGuid(cli.args[0]);
-        if (!g) { std::cout << "{\"error\":\"invalid guid\"}\n"; return 2; }
-        int w = std::stoi(cli.args[1]);
-        int h = std::stoi(cli.args[2]);
-        int refresh = std::stoi(cli.args[3]);
-        bool isolated = cli.args[4] == "1";
-        auto res = controller.SetMode(*g, w, h, refresh, isolated);
-        std::cout << res.json << std::endl;
-        return res.success ? 0 : 1;
+        std::map<std::string,std::string> kv;
+        kv["guid"] = cli.args[0];
+        kv["w"] = cli.args[1];
+        kv["h"] = cli.args[2];
+        kv["refresh"] = cli.args[3];
+        kv["iso"] = cli.args[4];
+        auto res = send_kv("mode", kv);
+        std::cout << res.second << std::endl;
+        return res.first ? 0 : 1;
     }
 
     if (cli.verb == "primary" && cli.args.size() >= 1) {
-        auto g = vdc::StringToGuid(cli.args[0]);
-        if (!g) { std::cout << "{\"error\":\"invalid guid\"}\n"; return 2; }
-        auto res = controller.SetPrimary(*g);
-        std::cout << res.json << std::endl;
-        return res.success ? 0 : 1;
+        std::map<std::string,std::string> kv;
+        kv["guid"] = cli.args[0];
+        auto res = send_kv("primary", kv);
+        std::cout << res.second << std::endl;
+        return res.first ? 0 : 1;
     }
 
     if (cli.verb == "hdr" && cli.args.size() >= 2) {
-        auto g = vdc::StringToGuid(cli.args[0]);
-        if (!g) { std::cout << "{\"error\":\"invalid guid\"}\n"; return 2; }
-        bool enable = cli.args[1] == "1";
-        auto res = controller.SetHdr(*g, enable);
-        std::cout << res.json << std::endl;
-        return res.success ? 0 : 1;
+        std::map<std::string,std::string> kv;
+        kv["guid"] = cli.args[0];
+        kv["enable"] = cli.args[1];
+        auto res = send_kv("hdr", kv);
+        std::cout << res.second << std::endl;
+        return res.first ? 0 : 1;
     }
 
     if (cli.verb == "query" && cli.args.size() >= 1) {
-        auto g = vdc::StringToGuid(cli.args[0]);
-        if (!g) { std::cout << "{\"error\":\"invalid guid\"}\n"; return 2; }
-        auto res = controller.Query(*g);
-        std::cout << res.json << std::endl;
-        return res.success ? 0 : 1;
+        std::map<std::string,std::string> kv;
+        kv["guid"] = cli.args[0];
+        auto res = send_kv("query", kv);
+        std::cout << res.second << std::endl;
+        return res.first ? 0 : 1;
     }
 
     std::cout << "{\"error\":\"unknown verb\"}\n";
-    std::cout << "VirtualDisplayController exiting.\n";
+    std::cout << "SudoVdaController exiting...\n";
     return 2;
 }

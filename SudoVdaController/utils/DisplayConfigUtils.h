@@ -2,7 +2,7 @@
 #include <string>
 #include <optional>
 #include <windows.h>
-#include "VirtualDisplayTypes.h"
+#include "../models/VirtualDisplayTypes.h"
 
 namespace vdc {
 

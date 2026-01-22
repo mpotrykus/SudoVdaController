@@ -8,10 +8,7 @@
 #define FILE_DEVICE_UNKNOWN 0x00000022
 #endif
 
-// #include <ddk/d4iface.h>
-// #include <ddk/d4drvif.h>
-// Use the bundled vendor header via a relative path so the compiler can find it
-#include "vendor/sudovda/sudovda.h"
+#include "../third_party/sudovda/sudovda.h"
 
 namespace VDISPLAY {
 	enum class DRIVER_STATUS {

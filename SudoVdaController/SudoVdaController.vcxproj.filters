@@ -1,83 +1,89 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="src">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    <Filter Include="controller">
+      <UniqueIdentifier>{64f87305-fbf8-4789-9ea9-d4dad75aec41}</UniqueIdentifier>
     </Filter>
-    <Filter Include="src\include">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    <Filter Include="models">
+      <UniqueIdentifier>{d9137be2-1346-46e4-a14c-47671c181ab1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party">
+      <UniqueIdentifier>{bca948e4-eb54-4348-8e08-0859e47914dd}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="third_party\sudovda">
+      <UniqueIdentifier>{bbde4261-12c5-4ba9-881c-977b59dc8300}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="utils">
+      <UniqueIdentifier>{f3ee543a-478e-499f-a3f0-176ee6d13b20}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="CliParser.h">
-      <Filter>src\include</Filter>
+    <ClCompile Include="utils\CliParser.h">
+      <Filter>utils</Filter>
     </ClCompile>
-    <ClCompile Include="DisplayConfigUtils.cpp">
-      <Filter>src</Filter>
+    <ClCompile Include="utils\DisplayConfigUtils.cpp">
+      <Filter>utils</Filter>
     </ClCompile>
-    <ClCompile Include="HdrUtils.cpp">
-      <Filter>src</Filter>
+    <ClCompile Include="utils\HdrUtils.cpp">
+      <Filter>utils</Filter>
     </ClCompile>
-    <ClCompile Include="main.cpp">
-      <Filter>src</Filter>
+    <ClCompile Include="controller\VirtualDisplaySession.cpp">
+      <Filter>controller</Filter>
     </ClCompile>
-    <ClCompile Include="VdaSession.cpp">
-      <Filter>src</Filter>
+    <ClCompile Include="controller\VirtualDisplayController.cpp">
+      <Filter>controller</Filter>
     </ClCompile>
-    <ClCompile Include="VirtualDisplay.cpp">
-      <Filter>src</Filter>
+    <ClCompile Include="controller\VirtualDisplay.cpp">
+      <Filter>controller</Filter>
     </ClCompile>
-    <ClCompile Include="VirtualDisplayController.cpp">
-      <Filter>src</Filter>
+    <ClCompile Include="controller\VdaSession.cpp">
+      <Filter>controller</Filter>
     </ClCompile>
-    <ClCompile Include="VirtualDisplaySession.cpp">
-      <Filter>src</Filter>
+    <ClCompile Include="controller\TrayServer.cpp">
+      <Filter>controller</Filter>
     </ClCompile>
-    <ClCompile Include="VirtualDisplayTypes.cpp">
-      <Filter>src</Filter>
-    </ClCompile>
+    <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="DisplayConfigUtils.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="utils\DisplayConfigUtils.h">
+      <Filter>utils</Filter>
     </ClInclude>
-    <ClInclude Include="GuidUtils.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="utils\GuidUtils.h">
+      <Filter>utils</Filter>
     </ClInclude>
-    <ClInclude Include="HdrUtils.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="utils\HdrUtils.h">
+      <Filter>utils</Filter>
     </ClInclude>
-    <ClInclude Include="Json.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="utils\JsonUtils.h">
+      <Filter>utils</Filter>
     </ClInclude>
-    <ClInclude Include="pch.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="third_party\sudovda\sudovda-ioctl.h">
+      <Filter>third_party\sudovda</Filter>
     </ClInclude>
-    <ClInclude Include="VdaSession.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="third_party\sudovda\sudovda.h">
+      <Filter>third_party\sudovda</Filter>
     </ClInclude>
-    <ClInclude Include="VirtualDisplay.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="models\VirtualDisplayTypes.h">
+      <Filter>models</Filter>
     </ClInclude>
-    <ClInclude Include="VirtualDisplayConfig.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="models\VirtualDisplayConfig.h">
+      <Filter>models</Filter>
     </ClInclude>
-    <ClInclude Include="VirtualDisplayController.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="controller\VirtualDisplaySession.h">
+      <Filter>controller</Filter>
     </ClInclude>
-    <ClInclude Include="VirtualDisplaySession.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="controller\VirtualDisplayController.h">
+      <Filter>controller</Filter>
     </ClInclude>
-    <ClInclude Include="VirtualDisplayTypes.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="controller\VirtualDisplay.h">
+      <Filter>controller</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\sudovda\sudovda.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="controller\VdaSession.h">
+      <Filter>controller</Filter>
     </ClInclude>
-    <ClInclude Include="vendor\sudovda\sudovda-ioctl.h">
-      <Filter>src\include</Filter>
+    <ClInclude Include="controller\TrayServer.h">
+      <Filter>controller</Filter>
     </ClInclude>
+    <ClInclude Include="pch.h" />
   </ItemGroup>
 </Project>

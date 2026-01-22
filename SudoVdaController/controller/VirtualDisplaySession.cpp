@@ -1,7 +1,8 @@
-#include "pch.h"
+#include "../pch.h"
 #include "VirtualDisplaySession.h"
-#include "DisplayConfigUtils.h"
-#include "HdrUtils.h"
+#include "../utils/DisplayConfigUtils.h"
+#include "../utils/HdrUtils.h"
+#include "../models/VirtualDisplayConfig.h"
 
 using namespace vdisplay;
 using namespace vdc;
