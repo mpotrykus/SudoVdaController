@@ -15,6 +15,9 @@
 #include <codecvt>
 #include <mutex>
 #include <unordered_map>
+#include <sddl.h>
+#include <iostream>
+#include "../Utils/JsonUtils.h"
 
 using namespace vdc;
 
@@ -26,11 +29,22 @@ namespace {
 
     static std::atomic<bool> g_running{ false };
 
+    enum class DisplayAction : int {
+        None = 0,
+        Details = 1,
+        Remove = 2
+    };
+
+    struct MenuItem {
+        GUID guid;
+        DisplayAction action = DisplayAction::None;
+    };
+
     // Window -> context with controller pointer, mutex and menu map
     struct TrayContext {
         vdc::VirtualDisplayController* controller;
         std::mutex* controllerMutex;
-        std::unordered_map<UINT, GUID>* menuMap;
+        std::unordered_map<UINT, MenuItem>* menuMap;
     };
 
     // single static context instance used by WndProc and initialized in RunTrayServer
@@ -121,43 +135,101 @@ namespace {
                         std::wstring label = p.second;
                         std::string gstr = vdc::GuidToString(p.first);
                         std::wstring gw = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(gstr);
-                        label += L" (";
-                        label += gw;
-                        label += L")";
-                        // Insert menu item and record mapping id -> guid
-                        InsertMenuW(hMenu, 0, MF_BYPOSITION | MF_STRING, id, label.c_str());
-                        ctx->menuMap->emplace(id, p.first);
+
+                        // Submenu
+						HMENU hSub = CreatePopupMenu();
+                        if (!hSub) continue;
+
+                        // Details
+                        AppendMenuW(hSub, MF_STRING, id, L"Details");
+                        ctx->menuMap->emplace(id, MenuItem{ p.first, DisplayAction::Details });
                         ++id;
+
+                        // Remove
+                        AppendMenuW(hSub, MF_STRING, id, L"Remove");
+                        ctx->menuMap->emplace(id, MenuItem{ p.first, DisplayAction::Remove });
+                        ++id;
+
+                        // Append popup submenu for this display with the label
+                        AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSub, label.c_str());
                     }
-                    // Separator then Exit
-                    InsertMenuW(hMenu, 0, MF_BYPOSITION | MF_SEPARATOR, 0, nullptr);
-                    InsertMenuW(hMenu, 0, MF_BYPOSITION | MF_STRING, MENU_EXIT_ID, L"Exit");
+                    // Separator then Exit (append so displays appear above)
+                    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+                    AppendMenuW(hMenu, MF_STRING, MENU_EXIT_ID, L"Exit");
+
                     SetForegroundWindow(hWnd); // required for TrackPopupMenu
                     TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, NULL);
+
                     DestroyMenu(hMenu);
                 }
                 return 0;
             }
         }
+
+        // Tray Commands
         if (msg == WM_COMMAND) {
             UINT cmd = LOWORD(wParam);
+
+			// Exit selection
             if (cmd == MENU_EXIT_ID) {
+                // Remove all displays before exiting to ensure clean shutdown.
+                // Do removals under the controller mutex, then wait briefly for them to be torn down.
+                if (ctx && ctx->controller && ctx->controllerMutex) {
+                    {
+                        std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
+                        auto list = ctx->controller->ListDisplays();
+                        for (const auto& p : list) {
+                            ctx->controller->RemoveDisplay(p.first);
+                        }
+                    }
+                    // Wait for displays to be removed (poll with timeout).
+                    const int maxChecks = 20;
+                    const std::chrono::milliseconds waitInterval(100);
+                    for (int i = 0; i < maxChecks; ++i) {
+                        {
+                            std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
+                            if (ctx->controller->CountDisplays() == 0) break;
+                        }
+                        std::this_thread::sleep_for(waitInterval);
+                    }
+                }
+                g_running.store(false);
                 PostMessageW(hWnd, WM_CLOSE, 0, 0);
                 return 0;
             }
-            // display removal selection
+
+            // per-display submenu selection
             if (ctx && ctx->menuMap) {
                 auto it = ctx->menuMap->find(cmd);
                 if (it != ctx->menuMap->end()) {
-                    GUID toRemove = it->second;
-                    if (ctx->controller && ctx->controllerMutex) {
-                        std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
-                        auto res = ctx->controller->RemoveDisplay(toRemove);
-                        // if last display removed, trigger shutdown
-                        if (res.success && ctx->controller->CountDisplays() == 0) {
-                            g_running.store(false);
-                            PostMessageW(hWnd, WM_CLOSE, 0, 0);
+
+					MenuItem mi = it->second;
+					GUID toActOn = mi.guid;
+                    if (mi.action == DisplayAction::Details) {
+                        std::string json;
+                        {
+                            std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
+                            auto res = ctx->controller->Query(toActOn);
+                            json = res.json;
                         }
+                        std::string formatted = vdc::JsonBuilder::FormatJsonAsList(json);
+                        std::wstring wformatted = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(formatted);
+                        MessageBoxW(hWnd, wformatted.c_str(), L"Display Details", MB_OK | MB_ICONINFORMATION);
+                    }
+                    else if (mi.action == DisplayAction::Remove) {
+                        bool removed = false;
+                        {
+                            std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
+                            auto res = ctx->controller->RemoveDisplay(toActOn);
+                            removed = res.success;
+                            if (removed && ctx->controller->CountDisplays() == 0) {
+                                g_running.store(false);
+                                PostMessageW(hWnd, WM_CLOSE, 0, 0);
+                            }
+                        }
+                        if (!removed) {
+                            MessageBoxW(hWnd, L"Failed to remove display.", L"Error", MB_OK | MB_ICONERROR);
+						}
                     }
                     return 0;
                 }
@@ -209,31 +281,93 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
 
     // Mutex protecting controller access and menu id mapping
     std::mutex controllerMutex;
-    std::unordered_map<UINT, GUID> menuMap;
+    std::unordered_map<UINT, MenuItem> menuMap;
     // initialize static context so WndProc can access controller/menu safely
-    g_ctx.controller = &controller;
-    g_ctx.controllerMutex = &controllerMutex;
-    g_ctx.menuMap = &menuMap;
+    g_ctx.controller = &controller; // No-op reassignment for consistency
+    g_ctx.controllerMutex = &controllerMutex; // No-op reassignment for consistency
+    g_ctx.menuMap = &menuMap; // No-op reassignment for consistency
 
     // Start pipe server thread
+    constexpr wchar_t READY_EVENT_NAME[] = L"SudoVdaTray_ReadyEvent";
+    // shutdown event used to interrupt ConnectNamedPipe waits
+    HANDLE shutdownEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     std::thread serverThread([&]() {
-        std::wstring fullPipe = L"\\.\\pipe\\" + pipeName;
+        std::wstring fullPipe = L"\\\\.\\pipe\\" + pipeName;
+
+        // Build a permissive security descriptor for the pipe so clients in other
+        // sessions / privilege levels (for debugging) can connect.
+        // SDDL "D:(A;;GA;;;WD)" = allow GENERIC_ALL to Everyone.
+        PSECURITY_DESCRIPTOR psd = NULL;
+        if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:(A;;GA;;;WD)", SDDL_REVISION_1, &psd, NULL)) {
+            std::cout << "ConvertStringSecurityDescriptorToSecurityDescriptorW failed: " << GetLastError() << "\n";
+            psd = NULL;
+        }
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(sa);
+        sa.lpSecurityDescriptor = psd;
+        sa.bInheritHandle = FALSE;
+
+        bool readySignaled = false;
         while (g_running.load()) {
             HANDLE hPipe = CreateNamedPipeW(
                 fullPipe.c_str(),
-                PIPE_ACCESS_DUPLEX,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                 PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
                 PIPE_UNLIMITED_INSTANCES,
                 8192, 8192,
                 0,
-                NULL
+                psd ? &sa : NULL // pass SECURITY_ATTRIBUTES when we successfully created a descriptor
             );
             if (hPipe == INVALID_HANDLE_VALUE) {
+                std::cout << "CreateNamedPipeW failed: " << GetLastError() << "\n";
                 Sleep(200);
                 continue;
             }
 
-            BOOL connected = ConnectNamedPipe(hPipe, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+            // Signal readiness once when we have successfully created the first pipe instance.
+            if (!readySignaled) {
+                HANDLE hEvent = CreateEventW(NULL, TRUE, TRUE, READY_EVENT_NAME);
+                if (hEvent) CloseHandle(hEvent);
+                readySignaled = true;
+            }
+
+            // Use overlapped ConnectNamedPipe so we can also wait on shutdownEvent.
+            OVERLAPPED ov{};
+            ov.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+            BOOL connectedSync = ConnectNamedPipe(hPipe, &ov);
+            BOOL connected = FALSE;
+            if (connectedSync) {
+                connected = TRUE;
+            } else {
+                DWORD err = GetLastError();
+                if (err == ERROR_PIPE_CONNECTED) {
+                    connected = TRUE;
+                } else if (err == ERROR_IO_PENDING) {
+                    // wait for either connection or shutdown
+                    HANDLE waitHandles[2] = { ov.hEvent, shutdownEvent };
+                    DWORD w = WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
+                    if (w == WAIT_OBJECT_0) {
+                        // overlapped event signaled
+                        DWORD bytes = 0;
+                        DWORD gle = 0;
+                        if (GetOverlappedResult(hPipe, &ov, &bytes, FALSE)) {
+                            connected = TRUE;
+                        }
+                    } else {
+                        // shutdown signaled, cancel and close pipe
+                        CancelIoEx(hPipe, &ov);
+                        CloseHandle(hPipe);
+                        CloseHandle(ov.hEvent);
+                        continue;
+                    }
+                } else {
+                    // other error
+                    CloseHandle(hPipe);
+                    CloseHandle(ov.hEvent);
+                    continue;
+                }
+            }
+            if (ov.hEvent) CloseHandle(ov.hEvent);
             if (!connected) { CloseHandle(hPipe); continue; }
 
             std::string request;
@@ -361,6 +495,7 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
             CloseHandle(hPipe);
         } // while g_running
 
+        if (psd) LocalFree(psd);
     }); // serverThread
 
     // Message loop (blocks until PostQuitMessage)
@@ -373,9 +508,25 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
     // Cleanup tray icon
     Shell_NotifyIconW(NIM_DELETE, &nid);
 
+    // Signal shutdown event to wake any ConnectNamedPipe overlapped waits.
+    if (shutdownEvent) {
+        SetEvent(shutdownEvent);
+        CloseHandle(shutdownEvent);
+    }
+
     // Ensure server thread stops
     g_running.store(false);
-    if (serverThread.joinable()) serverThread.join();
+    if (serverThread.joinable()) {
+        // Wait up to 5s for the server thread to exit after we signaled shutdownEvent.
+        HANDLE th = serverThread.native_handle();
+        DWORD wait = WaitForSingleObject(th, 5000); // 5s
+        if (wait == WAIT_OBJECT_0) {
+            serverThread.join();
+        } else {
+            std::cout << "Server thread did not exit in time; detaching and continuing shutdown.\n";
+            serverThread.detach();
+        }
+    }
 
     // reset static context pointers
     g_ctx.controller = nullptr;

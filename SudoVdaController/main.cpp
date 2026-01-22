@@ -43,37 +43,64 @@ static bool StartTrayProcessIfNeeded() {
 
     // not ready -> start tray process
     wchar_t exePath[MAX_PATH];
-    if (!GetModuleFileNameW(NULL, exePath, ARRAYSIZE(exePath))) return false;
+    if (!GetModuleFileNameW(NULL, exePath, ARRAYSIZE(exePath))) {
+        std::cout << "GetModuleFileNameW failed.\n";
+        return false;
+    }
 
     std::wstring cmd = std::wstring(L"\"") + exePath + L"\" --tray";
-    
+    std::cout << "Starting tray process: " << std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(cmd) << "\n";
+
     PROCESS_INFORMATION pi{};
     STARTUPINFOW si{}; 
     si.cb = sizeof(si);
-    BOOL ok = CreateProcessW(NULL, &cmd[0], NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
-    if (!ok) return false;
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-
-    // wait for pipe to appear
-    for (int i=0;i<40;i++) {
-        if (WaitNamedPipeW(pipePath.c_str(), 250)) return true;
+    BOOL ok = CreateProcessW(NULL, &cmd[0], NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+    if (!ok) {
+        std::cout << "CreateProcessW failed: " << GetLastError() << "\n";
+        return false;
     }
+    std::cout << "Started tray process, pid=" << pi.dwProcessId << "\n";
+
+    // Poll by trying to open the pipe. Print GetLastError for diagnostics.
+    const int maxAttempts = 40;
+    const std::chrono::milliseconds delay(250);
+    for (int i = 0; i < maxAttempts; ++i) {
+        HANDLE h = CreateFileW(pipePath.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            CloseHandle(h);
+            return true;
+        }
+        DWORD err = GetLastError();
+        // std::cout << "CreateFileW(pipe) failed attempt " << (i + 1) << ", GetLastError=" << err << "\n";
+        if (err == ERROR_ACCESS_DENIED) {
+            std::cout << "Access denied when attempting to open pipe. This likely indicates an ACL/integrity-level issue.\n";
+            return false;
+        }
+        std::this_thread::sleep_for(delay);
+    }
+
+    std::cout << "Tray process pipe did not become available (timeout).\n";
     return false;
 }
 
 static bool SendToTray(const std::string& message, std::string& outResponse) {
     std::wstring fullPipe = L"\\\\.\\pipe\\" + PIPE_NAME;
     // Ensure tray is running (start if needed) and wait until the pipe becomes available.
-    if (!StartTrayProcessIfNeeded()) return false;
+    if (!StartTrayProcessIfNeeded()) {
+		std::cout << "Failed to start or connect to tray process.\n";
+        return false;
+    }
 
     HANDLE h = INVALID_HANDLE_VALUE;
     const int maxAttempts = 40;
     for (int attempt = 0; attempt < maxAttempts; ++attempt) {
         h = CreateFileW(fullPipe.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-        if (h != INVALID_HANDLE_VALUE) break;
+        if (h != INVALID_HANDLE_VALUE) {
+			std::cout << "Connected to tray process on attempt " << (attempt + 1) << "\n";
+            break;
+        }
         // brief backoff; allow the tray process to create the pipe
-        Sleep(100);
+        Sleep(1000);
     }
     if (h == INVALID_HANDLE_VALUE) return false;
 
@@ -97,6 +124,7 @@ static bool SendToTray(const std::string& message, std::string& outResponse) {
 }
 
 int main(int argc, char** argv) {
+    
     (void)argc; (void)argv;
     std::cout << "SudoVdaController starting...\n";
 
@@ -151,18 +179,22 @@ int main(int argc, char** argv) {
     // All commands are forwarded to the tray server which owns displays.
     // Build a simple message format: verb\nkey=val&key2=val2...\n
     auto send_kv = [&](const std::string& verb, const std::map<std::string,std::string>& kv) -> std::pair<bool,std::string> {
+
         std::ostringstream msg;
         msg << verb << "\n";
+
         bool first = true;
         for (const auto& p : kv) {
             if (!first) msg << "&";
             first = false;
             msg << p.first << "=" << p.second;
         }
+
         std::string resp;
         if (!SendToTray(msg.str(), resp)) {
             return { false, std::string("{\"error\":\"failed to contact tray\"}") };
         }
+
         return { true, resp };
     };
 
@@ -265,54 +297,55 @@ int main(int argc, char** argv) {
         std::cout << res.second << std::endl;
 
         // If we couldn't contact the tray, fall back to creating locally so the command still works.
-        if (!res.first) {
-            VirtualDisplayController localController;
-            auto localRes = localController.CreateDisplay(cfg, guidOpt);
-            std::cout << localRes.json << std::endl;
-            if (!localRes.success) {
-                std::cerr << localRes.json << std::endl;
-                return 1;
-            }
-            // extract guid and verify
-            std::string guidStr;
-            const std::string key = "\"guid\":\"";
-            auto pos = localRes.json.find(key);
-            if (pos != std::string::npos) {
-                auto start = pos + key.size();
-                auto end = localRes.json.find('"', start);
-                if (end != std::string::npos && end > start) guidStr = localRes.json.substr(start, end - start);
-            }
-            if (!guidStr.empty()) {
-                auto g = vdc::StringToGuid(guidStr);
-                if (g) {
-                    const int maxRetries = 10;
-                    const auto delay = std::chrono::milliseconds(200);
-                    bool verified = false;
-                    for (int i = 0; i < maxRetries; ++i) {
-                        auto qres = localController.Query(*g);
-                        if (qres.success) { std::cout << qres.json << std::endl; verified = true; break; }
-                        std::this_thread::sleep_for(delay);
-                    }
-                    if (!verified) {
-                        std::cerr << "{\"error\":\"create verification failed: device not found after retries\"}\n";
-                        return 1;
-                    }
-                }
-            }
+        //if (!res.first) {
+        //    VirtualDisplayController localController;
+        //    auto localRes = localController.CreateDisplay(cfg, guidOpt);
+        //    std::cout << localRes.json << std::endl;
+        //    if (!localRes.success) {
+        //        std::cerr << localRes.json << std::endl;
+        //        return 1;
+        //    }
+        //    // extract guid and verify
+        //    std::string guidStr;
+        //    const std::string key = "\"guid\":\"";
+        //    auto pos = localRes.json.find(key);
+        //    if (pos != std::string::npos) {
+        //        auto start = pos + key.size();
+        //        auto end = localRes.json.find('"', start);
+        //        if (end != std::string::npos && end > start) guidStr = localRes.json.substr(start, end - start);
+        //    }
+        //    if (!guidStr.empty()) {
+        //        auto g = vdc::StringToGuid(guidStr);
+        //        if g) {
+        //            const int maxRetries = 10;
+        //            const auto delay = std::chrono::milliseconds(200);
+        //            bool verified = false;
+        //            for (int i = 0; i < maxRetries; ++i) {
+        //                auto qres = localController.Query(*g);
+        //                if (qres.success) { std::cout << qres.json << std::endl; verified = true; break; }
+        //                std::this_thread::sleep_for(delay);
+        //            }
+        //            if (!verified) {
+        //                std::cerr << "{\"error\":\"create verification failed: device not found after retries\"}\n";
+        //                return 1;
+        //            }
+        //        }
+        //    }
 
-            if (keepAliveRequested) {
-                std::cout << "Created locally; press Enter to exit client (display will be removed on exit).\n";
-                std::string dummy; std::getline(std::cin, dummy);
-            }
+        //    if (keepAliveRequested) {
+        //        std::cout << "Created locally; press Enter to exit client (display will be removed on exit).\n";
+        //        std::string dummy; std::getline(std::cin, dummy);
+        //    }
 
-            return 0;
-        }
+        //    return 0;
+        //}
 
-        // If user requested to keep-alive, wait for Enter (tray owns the display)
-        if (keepAliveRequested) {
-            std::cout << "create request sent to tray; press Enter to exit client.\n";
-            std::string dummy; std::getline(std::cin, dummy);
-        }
+        //// If user requested to keep-alive, wait for Enter (tray owns the display)
+        //if (keepAliveRequested) {
+        //    std::cout << "create request sent to tray; press Enter to exit client.\n";
+        //    std::string dummy; std::getline(std::cin, dummy);
+        //}
+
         return 0;
     }
 
