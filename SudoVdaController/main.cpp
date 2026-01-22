@@ -13,6 +13,7 @@
 #include <chrono>
 #include <sstream>
 #include <iomanip>
+#include <cstdlib>
 
 using namespace vdc;
 
@@ -163,6 +164,7 @@ int main(int argc, char** argv) {
             std::cout << "  primary <guid>                       Make display primary\n";
             std::cout << "  hdr <guid> <0|1>                     Disable/enable HDR\n";
             std::cout << "  query <guid>                         Query display state\n";
+            std::cout << "  sunshine                             Will automatically capture and assign Sunshine or Apollo environment variables\n";
             std::cout << "Options:\n";
             std::cout << "  --help, -h                           Show this help message\n";
             std::cout << "Examples:\n";
@@ -356,6 +358,62 @@ int main(int argc, char** argv) {
         auto res = send_kv("query", kv);
         std::cout << res.second << std::endl;
         return res.first ? 0 : 1;
+    }
+
+    if (cli.verb == "sunshine") {
+        // Gather environment variables used by Sunshine / Apollo streaming clients
+        auto getenv_first = [&](std::initializer_list<const char*> names)->std::optional<std::string> {
+            for (const char* n : names) {
+                const char* v = std::getenv(n);
+                if (v && *v) return std::string(v);
+            }
+            return std::nullopt;
+            };
+
+        VirtualDisplayConfig cfg;
+
+        if (auto dn = getenv_first({ "SUNSHINE_APP_NAME","APOLLO_APP_NAME","APOLLO_CLIENT_NAME" })) {
+            std::wstring wdn = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(*dn);
+            cfg.deviceName = wdn;
+        }
+        if (auto w = getenv_first({ "SUNSHINE_CLIENT_WIDTH","APOLLO_CLIENT_WIDTH" })) {
+            try { cfg.width = std::stoi(*w); }
+            catch (...) {}
+        }
+        if (auto h = getenv_first({ "SUNSHINE_CLIENT_HEIGHT","APOLLO_CLIENT_HEIGHT" })) {
+            try { cfg.height = std::stoi(*h); }
+            catch (...) {}
+        }
+        if (auto f = getenv_first({ "SUNSHINE_CLIENT_FPS","APOLLO_CLIENT_FPS" })) {
+            try {
+                // prefer integer fps -> milliHz
+                if (f->find('.') != std::string::npos) {
+                    double hz = std::stod(*f);
+                    cfg.refreshRateMilliHz = static_cast<int>(hz * 1000.0 + 0.5);
+                }
+                else {
+                    int fps = std::stoi(*f);
+                    cfg.refreshRateMilliHz = fps * 1000;
+                }
+            }
+            catch (...) {}
+        }
+        if (auto hdr = getenv_first({ "SUNSHINE_CLIENT_HDR","APOLLO_CLIENT_HDR" })) {
+            std::string v = *hdr; for (auto& c : v) c = (char)tolower((unsigned char)c);
+            cfg.hdr = (v == "1" || v == "true" || v == "yes");
+        }
+
+        // Build kv and send
+        std::map<std::string, std::string> kv;
+        kv["deviceName"] = PercentEncodeUtf8(cfg.deviceName);
+        kv["width"] = std::to_string(cfg.width);
+        kv["height"] = std::to_string(cfg.height);
+        kv["refresh"] = std::to_string(cfg.refreshRateMilliHz);
+        kv["hdr"] = cfg.hdr ? "1" : "0";
+
+        auto res = send_kv("create", kv);
+        std::cout << res.second << std::endl;
+        return 0;
     }
 
     std::cout << "{\"error\":\"unknown verb\"}\n";
