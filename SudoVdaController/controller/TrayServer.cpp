@@ -15,6 +15,7 @@
 #include <codecvt>
 #include <mutex>
 #include <unordered_map>
+#include <optional>
 #include <sddl.h>
 #include <iostream>
 #include "../Utils/JsonUtils.h"
@@ -33,11 +34,14 @@ namespace {
         None = 0,
         Details = 1,
         Remove = 2
+        , Add = 3
+        , Custom = 4
     };
 
     struct MenuItem {
         GUID guid;
         DisplayAction action = DisplayAction::None;
+        std::optional<vdc::VirtualDisplayConfig> cfg; // optional config for Add action
     };
 
     // Window -> context with controller pointer, mutex and menu map
@@ -117,6 +121,212 @@ namespace {
         return WriteFile(hPipe, msg.c_str(), (DWORD)msg.size(), &written, NULL) && written == msg.size();
     }
 
+    // Launch the CLI (same exe) to perform a create command using the selected mode string.
+    static void LaunchCliCreate(const vdc::VirtualDisplayConfig& cfg, HWND hwnd) {
+        // command line
+        wchar_t exePath[MAX_PATH];
+        if (!GetModuleFileNameW(NULL, exePath, ARRAYSIZE(exePath))) {
+            MessageBoxW(hwnd, L"Failed to locate executable.", L"Add Display", MB_OK | MB_ICONERROR);
+            return;
+        }
+        std::wstring cmd = L"\"" + std::wstring(exePath) + L"\" create --width " + std::to_wstring(cfg.width)
+            + L" --height " + std::to_wstring(cfg.height)
+            + L" --refresh " + std::to_wstring(cfg.refreshRateMilliHz);
+        if (cfg.hdr) cmd += L" --hdr";
+
+        // create pipe for stdout/stderr
+        SECURITY_ATTRIBUTES sa{};
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+        sa.lpSecurityDescriptor = NULL;
+
+        HANDLE hRead = NULL;
+        HANDLE hWrite = NULL;
+        if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
+            MessageBoxW(hwnd, L"Failed to create pipe.", L"Add Display", MB_OK | MB_ICONERROR);
+            return;
+        }
+        // ensure the read handle is not inherited
+        SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+
+        // prepare process startup with redirected handles
+        std::vector<wchar_t> buf(cmd.begin(), cmd.end()); buf.push_back(0);
+        PROCESS_INFORMATION pi{};
+        STARTUPINFOW si{};
+        si.cb = sizeof(si);
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdOutput = hWrite;
+        si.hStdError = hWrite;
+        si.hStdInput = NULL;
+
+        BOOL ok = CreateProcessW(NULL, buf.data(), NULL, NULL, TRUE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+        // parent can close write handle immediately; child has its own handle
+        CloseHandle(hWrite);
+
+        if (!ok) {
+            std::wstring err = L"Failed to start create process: " + std::to_wstring(GetLastError());
+            MessageBoxW(hwnd, err.c_str(), L"Add Display", MB_OK | MB_ICONERROR);
+            CloseHandle(hRead);
+            return;
+        }
+
+        // Read all output from child process while it runs (nonblocking loop)
+        std::string output;
+        const DWORD bufSize = 4096;
+        char buffer[bufSize];
+        DWORD readBytes = 0;
+        // Read until pipe closed by child
+        for (;;) {
+            BOOL r = ReadFile(hRead, buffer, bufSize - 1, &readBytes, NULL);
+            if (!r || readBytes == 0) break;
+            buffer[readBytes] = 0;
+            output.append(buffer, readBytes);
+        }
+
+        // Wait for child exit and fetch exit code
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD exitCode = 0;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        CloseHandle(hRead);
+
+        // Convert output (assumed UTF-8) to wide string for MessageBox
+        std::wstring wout;
+        try {
+            wout = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(output);
+        } catch (...) {
+            // fallback: crudely widen bytes
+            wout.assign(output.begin(), output.end());
+        }
+
+        if (exitCode != 0) {
+            std::wstring msg = L"Create command failed";
+            if (!wout.empty()) msg += L":\n\n" + wout;
+            MessageBoxW(hwnd, msg.c_str(), L"Add Display", MB_OK | MB_ICONERROR);
+        }
+    }
+
+    // Show a simple modal custom-create dialog. Returns true when user pressed Create and outCfg is filled.
+    // control IDs for custom dialog
+    constexpr int IDC_NAME = 1001;
+    constexpr int IDC_WIDTH = 1002;
+    constexpr int IDC_HEIGHT = 1003;
+    constexpr int IDC_REFRESH = 1004;
+    constexpr int IDC_HDR = 1005;
+    constexpr int IDC_CREATE = 1006;
+    constexpr int IDC_CANCEL = 1007;
+
+    struct CustomDialogState { HWND dlg; HWND eName,eWidth,eHeight,eRefresh,hdr; vdc::VirtualDisplayConfig out; bool ok; };
+
+    static LRESULT CALLBACK CustomCreateDlgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        CustomDialogState* st = (CustomDialogState*)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
+        switch (msg) {
+        case WM_COMMAND: {
+            int id = LOWORD(wParam);
+            if (!st) break;
+            if (id == IDC_CREATE) {
+                // gather values
+                wchar_t buf[256];
+                GetWindowTextW(st->eName, buf, _countof(buf)); st->out.deviceName = buf;
+                GetWindowTextW(st->eWidth, buf, _countof(buf)); try { st->out.width = std::stoi(std::wstring(buf)); } catch(...) {}
+                GetWindowTextW(st->eHeight, buf, _countof(buf)); try { st->out.height = std::stoi(std::wstring(buf)); } catch(...) {}
+                GetWindowTextW(st->eRefresh, buf, _countof(buf)); {
+                    std::wstring s(buf);
+                    try {
+                        if (s.find(L'.') != std::wstring::npos) {
+                            double hz = std::stod(std::wstring(s)); st->out.refreshRateMilliHz = static_cast<int>(hz * 1000.0 + 0.5);
+                        } else {
+                            long long v = std::stoll(std::wstring(s));
+                            if (v < 1000) st->out.refreshRateMilliHz = static_cast<int>(v * 1000);
+                            else st->out.refreshRateMilliHz = static_cast<int>(v);
+                        }
+                    } catch(...) {}
+                }
+                st->out.hdr = (SendMessageW(st->hdr, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                st->ok = true;
+                DestroyWindow(hWnd);
+                return 0;
+            }
+            if (id == IDC_CANCEL) {
+                st->ok = false;
+                DestroyWindow(hWnd);
+                return 0;
+            }
+            break;
+        }
+        case WM_CLOSE:
+            DestroyWindow(hWnd);
+            return 0;
+        case WM_DESTROY:
+            return 0;
+        }
+        return DefWindowProcW(hWnd, msg, wParam, lParam);
+    }
+
+    static bool ShowCustomCreateDialog(HWND parent, vdc::VirtualDisplayConfig& outCfg) {
+        CustomDialogState* st = new CustomDialogState();
+        st->dlg = NULL; st->eName = NULL; st->eWidth = NULL; st->eHeight = NULL; st->eRefresh = NULL; st->hdr = NULL; st->ok = false;
+
+        const int W = 380, H = 220;
+        st->dlg = CreateWindowExW(0, L"Static", L"Create Display", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, W, H, parent, NULL, GetModuleHandleW(NULL), NULL);
+        if (!st->dlg) { delete st; return false; }
+
+        // Create controls
+        int x = 12, y = 12, labelW = 80, editW = 260, h = 22, gap = 6;
+        CreateWindowExW(0, L"Static", L"Name:", WS_CHILD | WS_VISIBLE, x, y, labelW, h, st->dlg, NULL, GetModuleHandleW(NULL), NULL);
+        st->eName = CreateWindowExW(0, L"Edit", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | WS_TABSTOP, x+labelW, y, editW, h, st->dlg, (HMENU)IDC_NAME, GetModuleHandleW(NULL), NULL);
+        y += h + gap;
+        CreateWindowExW(0, L"Static", L"Width:", WS_CHILD | WS_VISIBLE, x, y, labelW, h, st->dlg, NULL, GetModuleHandleW(NULL), NULL);
+        st->eWidth = CreateWindowExW(0, L"Edit", L"1920", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | WS_TABSTOP, x+labelW, y, 100, h, st->dlg, (HMENU)IDC_WIDTH, GetModuleHandleW(NULL), NULL);
+        CreateWindowExW(0, L"Static", L"Height:", WS_CHILD | WS_VISIBLE, x+labelW+110, y, 60, h, st->dlg, NULL, GetModuleHandleW(NULL), NULL);
+        st->eHeight = CreateWindowExW(0, L"Edit", L"1080", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | WS_TABSTOP, x+labelW+170, y, 90, h, st->dlg, (HMENU)IDC_HEIGHT, GetModuleHandleW(NULL), NULL);
+        y += h + gap;
+        CreateWindowExW(0, L"Static", L"Refresh:", WS_CHILD | WS_VISIBLE, x, y, labelW, h, st->dlg, NULL, GetModuleHandleW(NULL), NULL);
+        st->eRefresh = CreateWindowExW(0, L"Edit", L"60", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | WS_TABSTOP, x+labelW, y, 100, h, st->dlg, (HMENU)IDC_REFRESH, GetModuleHandleW(NULL), NULL);
+        st->hdr = CreateWindowExW(0, L"Button", L"HDR", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP, x+labelW+110, y, 80, h, st->dlg, (HMENU)IDC_HDR, GetModuleHandleW(NULL), NULL);
+        y += h + gap*2;
+
+        HWND bCreate = CreateWindowExW(0, L"Button", L"Create", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, W - 200, H - 75, 80, 26, st->dlg, (HMENU)IDC_CREATE, GetModuleHandleW(NULL), NULL);
+        HWND bCancel = CreateWindowExW(0, L"Button", L"Cancel", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP, W - 110, H - 75, 80, 26, st->dlg, (HMENU)IDC_CANCEL, GetModuleHandleW(NULL), NULL);
+
+        // subclass dialog to handle commands
+        SetWindowLongPtrW(st->dlg, GWLP_USERDATA, (LONG_PTR)st);
+        // subclass dialog to custom proc
+        SetWindowLongPtrW(st->dlg, GWLP_WNDPROC, (LONG_PTR)CustomCreateDlgProc);
+
+        // Always center on the primary screen so the dialog is reachable
+        int sx = GetSystemMetrics(SM_CXSCREEN);
+        int sy = GetSystemMetrics(SM_CYSCREEN);
+        int px = sx/2 - W/2;
+        int py = sy/2 - H/2;
+        if (px < 0) px = 0;
+        if (py < 0) py = 0;
+        SetWindowPos(st->dlg, NULL, px, py, 0,0, SWP_NOSIZE | SWP_NOZORDER);
+
+        EnableWindow(parent, FALSE);
+        ShowWindow(st->dlg, SW_SHOW);
+        // set initial focus to first control
+        SetFocus(st->eName);
+
+        // modal message loop until dialog destroyed using GetMessage + IsDialogMessage for tab handling
+        MSG msg{};
+        while (IsWindow(st->dlg)) {
+            if (!GetMessageW(&msg, NULL, 0, 0)) break;
+            if (!IsDialogMessageW(st->dlg, &msg)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+
+        // after window destroyed, check st->ok and populate outCfg
+        bool okRes = st->ok;
+        if (okRes) outCfg = st->out;
+        EnableWindow(parent, TRUE);
+        delete st;
+        return okRes;
+    }
+
     // Proper window proc
     LRESULT CALLBACK TrayWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         TrayContext* ctx = &g_ctx;
@@ -153,8 +363,73 @@ namespace {
                         // Append popup submenu for this display with the label
                         AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSub, label.c_str());
                     }
-                    // Separator then Exit (append so displays appear above)
+
                     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+
+                    // Add submenu for "Add" modes above Exit
+                    HMENU hRes = CreatePopupMenu();
+                    if (hRes) {
+                        
+                        std::vector<std::string> resolutions = { "3840x2160", "2560x1440", "1920x1080", "1280x720" };
+                        std::vector<std::string> refreshRates = { "240hz", "144hz", "120hz", "199.97hz", "60hz", "59.97hz" , "24hz" };
+                        std::vector<std::string> colorSpace = { "HDR", "SDR" };
+
+                        for (const auto& res : resolutions) {
+
+                            HMENU hRate = CreatePopupMenu();
+                            if (!hRate) continue;
+
+                            std::wstring wRes = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(res);
+
+                            for (const auto& rate : refreshRates) {
+
+                                HMENU hAdd = CreatePopupMenu();
+                                if (!hAdd) continue;
+
+                                std::wstring wRate = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(rate);
+
+                                for (const auto& cs : colorSpace) {
+                                    std::wstring wCs = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(cs);
+                                    AppendMenuW(hAdd, MF_STRING, id, wCs.c_str());
+
+                                    vdc::VirtualDisplayConfig cfg;
+                                    // parse res like "1920x1080"
+                                    try {
+                                        auto x = res.find('x');
+                                        if (x!=std::string::npos) {
+                                            cfg.width = std::stoi(res.substr(0,x));
+                                            cfg.height = std::stoi(res.substr(x+1));
+                                        }
+                                    } catch(...) {}
+                                    // parse rate like "60hz" or "59.97hz"
+                                    try {
+                                        std::string rateClean;
+                                        for (char c: rate) if ((c>='0' && c<='9')||c=='.') rateClean.push_back(c);
+                                        if (!rateClean.empty()) {
+                                            double rf = std::stod(rateClean);
+                                            cfg.refreshRateMilliHz = static_cast<int>(rf * 1000.0);
+                                        }
+                                    } catch(...) {}
+                                    cfg.hdr = (cs == "HDR");
+
+                                    ctx->menuMap->emplace(id, MenuItem{ GUID(), DisplayAction::Add, cfg});
+                                    ++id;
+                                }
+                                AppendMenuW(hRate, MF_POPUP, (UINT_PTR)hAdd, wRate.c_str());
+
+                            }
+                            AppendMenuW(hRes, MF_POPUP, (UINT_PTR)hRate, wRes.c_str());
+
+                        }
+                        // Custom option
+                        AppendMenuW(hRes, MF_SEPARATOR, 0, nullptr);
+                        AppendMenuW(hRes, MF_STRING, id, L"Custom");
+                        ctx->menuMap->emplace(id, MenuItem{ GUID(), DisplayAction::Custom, std::optional<vdc::VirtualDisplayConfig>{} });
+                        ++id;
+
+                        AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hRes, L"Add display");
+                    }
+
                     AppendMenuW(hMenu, MF_STRING, MENU_EXIT_ID, L"Exit");
 
                     SetForegroundWindow(hWnd); // required for TrackPopupMenu
@@ -230,6 +505,18 @@ namespace {
                         if (!removed) {
                             MessageBoxW(hWnd, L"Failed to remove display.", L"Error", MB_OK | MB_ICONERROR);
 						}
+                    }
+                    else if (mi.action == DisplayAction::Add && mi.cfg) {
+                        // Launch CLI create flow for the selected mode using typed config
+                        LaunchCliCreate(*mi.cfg, hWnd);
+                        return 0;
+                    }
+                    else if (mi.action == DisplayAction::Custom) {
+                        vdc::VirtualDisplayConfig cfg;
+                        if (ShowCustomCreateDialog(hWnd, cfg)) {
+                            LaunchCliCreate(cfg, hWnd);
+                        }
+                        return 0;
                     }
                     return 0;
                 }

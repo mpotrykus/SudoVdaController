@@ -130,8 +130,12 @@ int main(int argc, char** argv) {
 
     // Optionally initialize COM for modules that expect it:
     EnsureComInitialized();
+    // Default to tray mode when launched with no verbs/arguments (double-click)
+    if (argc <= 1) {
+        return vdc::RunTrayServer(PIPE_NAME);
+    }
 
-    // If launched as tray process, run server loop
+    // If launched with explicit --tray flag, run server loop
     for (int i = 1; i < argc; ++i) {
         std::string a(argv[i]);
         if (a == "--tray") {
@@ -141,7 +145,6 @@ int main(int argc, char** argv) {
     }
 
     // New: handle --help / -h / help before parsing and detect --stay
-    bool keepAliveRequested = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg(argv[i]);
         if (arg == "--help" || arg == "-h" || arg == "help") {
@@ -155,7 +158,6 @@ int main(int argc, char** argv) {
             std::cout << "        --hdr [0|1]                    Enable/disable HDR (or use --no-hdr)\n";
             std::cout << "        --adapter <id>                 Adapter LUID as decimal or 0xhex\n";
             std::cout << "        --guid <guid>                  Request a specific GUID for the device\n";
-            std::cout << "        --stay                         Keep the process alive so the created display remains present\n";
             std::cout << "  remove <guid>                       Remove a virtual display\n";
             std::cout << "  mode <guid> <w> <h> <refresh> <iso> Set mode (iso: 1=isolated, 0=not)\n";
             std::cout << "  primary <guid>                      Make display primary\n";
@@ -168,9 +170,6 @@ int main(int argc, char** argv) {
             std::cout << "  SudoVdaController create --width 2560 --height 1440 --refresh 119980 --stay\n";
             std::cout << "  SudoVdaController remove 01234567-89ab-cdef-0123-456789abcdef\n";
             return 0;
-        }
-        if (arg == "--stay") {
-            keepAliveRequested = true;
         }
     }
 
@@ -295,56 +294,6 @@ int main(int argc, char** argv) {
 
         auto res = send_kv("create", kv);
         std::cout << res.second << std::endl;
-
-        // If we couldn't contact the tray, fall back to creating locally so the command still works.
-        //if (!res.first) {
-        //    VirtualDisplayController localController;
-        //    auto localRes = localController.CreateDisplay(cfg, guidOpt);
-        //    std::cout << localRes.json << std::endl;
-        //    if (!localRes.success) {
-        //        std::cerr << localRes.json << std::endl;
-        //        return 1;
-        //    }
-        //    // extract guid and verify
-        //    std::string guidStr;
-        //    const std::string key = "\"guid\":\"";
-        //    auto pos = localRes.json.find(key);
-        //    if (pos != std::string::npos) {
-        //        auto start = pos + key.size();
-        //        auto end = localRes.json.find('"', start);
-        //        if (end != std::string::npos && end > start) guidStr = localRes.json.substr(start, end - start);
-        //    }
-        //    if (!guidStr.empty()) {
-        //        auto g = vdc::StringToGuid(guidStr);
-        //        if g) {
-        //            const int maxRetries = 10;
-        //            const auto delay = std::chrono::milliseconds(200);
-        //            bool verified = false;
-        //            for (int i = 0; i < maxRetries; ++i) {
-        //                auto qres = localController.Query(*g);
-        //                if (qres.success) { std::cout << qres.json << std::endl; verified = true; break; }
-        //                std::this_thread::sleep_for(delay);
-        //            }
-        //            if (!verified) {
-        //                std::cerr << "{\"error\":\"create verification failed: device not found after retries\"}\n";
-        //                return 1;
-        //            }
-        //        }
-        //    }
-
-        //    if (keepAliveRequested) {
-        //        std::cout << "Created locally; press Enter to exit client (display will be removed on exit).\n";
-        //        std::string dummy; std::getline(std::cin, dummy);
-        //    }
-
-        //    return 0;
-        //}
-
-        //// If user requested to keep-alive, wait for Enter (tray owns the display)
-        //if (keepAliveRequested) {
-        //    std::cout << "create request sent to tray; press Enter to exit client.\n";
-        //    std::string dummy; std::getline(std::cin, dummy);
-        //}
 
         return 0;
     }
