@@ -771,6 +771,7 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
             }
 
             ControllerResult cres{false, "unknown", "{\"error\":\"bad request\"}"};
+            bool shouldShutdownFromPipe = false;
 
             if (verb == "create") {
                 auto kv = ParseKvForm(payload);
@@ -866,6 +867,11 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
                     else cres = { false, "invalid guid", "{\"error\":\"invalid guid\"}" };
                 } else cres = { false, "missing guid", "{\"error\":\"missing guid\"}" };
             }
+            else if (verb == "exit") {
+                // graceful shutdown requested by external client
+                cres = { true, "ok", "{\"success\":true}" };
+                shouldShutdownFromPipe = true;
+            }
             else {
                 cres = { false, "unknown verb", "{\"error\":\"unknown verb\"}" };
             }
@@ -873,6 +879,15 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
             // write response
             WriteAllToPipe(hPipe, cres.json);
             FlushFileBuffers(hPipe);
+            // If client requested shutdown, reply then trigger server shutdown and break loop
+            if (shouldShutdownFromPipe) {
+                DisconnectNamedPipe(hPipe);
+                CloseHandle(hPipe);
+                g_running.store(false);
+                PostMessageW(hwnd, WM_CLOSE, 0, 0);
+                break;
+            }
+
             DisconnectNamedPipe(hPipe);
             CloseHandle(hPipe);
         } // while g_running

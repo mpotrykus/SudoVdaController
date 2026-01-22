@@ -360,6 +360,13 @@ int main(int argc, char** argv) {
         return res.first ? 0 : 1;
     }
 
+    if (cli.verb == "kill") {
+        // Request the tray process to exit
+        auto res = send_kv("exit", {});
+        std::cout << res.second << std::endl;
+        return res.first ? 0 : 1;
+    }
+
     if (cli.verb == "sunshine") {
         // Gather environment variables used by Sunshine / Apollo streaming clients
         auto getenv_first = [&](std::initializer_list<const char*> names)->std::optional<std::string> {
@@ -410,6 +417,7 @@ int main(int argc, char** argv) {
         kv["height"] = std::to_string(cfg.height);
         kv["refresh"] = std::to_string(cfg.refreshRateMilliHz);
         kv["hdr"] = cfg.hdr ? "1" : "0";
+        kv["primary"] = "1";
 
         auto res = send_kv("create", kv);
         std::cout << res.second << std::endl;
