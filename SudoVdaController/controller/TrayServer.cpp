@@ -19,6 +19,8 @@
 #include <sddl.h>
 #include <iostream>
 #include "../Utils/JsonUtils.h"
+#include "../utils/DisplayConfigUtils.h"
+#include "../utils/HdrUtils.h"
 
 using namespace vdc;
 
@@ -31,17 +33,21 @@ namespace {
     static std::atomic<bool> g_running{ false };
 
     enum class DisplayAction : int {
-        None = 0,
-        Details = 1,
-        Remove = 2
-        , Add = 3
-        , Custom = 4
+        None =       0,
+        Details =    1,
+        Remove =     2,
+        Add =        3,
+        SetPrimary = 4,
+        ToggleHdr =  5,
+        Custom =     6
     };
 
     struct MenuItem {
         GUID guid;
         DisplayAction action = DisplayAction::None;
         std::optional<vdc::VirtualDisplayConfig> cfg; // optional config for Add action
+        std::wstring physicalName; // for physical displays (GUID() sentinel), store GDI name
+        std::wstring physicalLabel; // full label shown in menu for physical displays
     };
 
     // Window -> context with controller pointer, mutex and menu map
@@ -350,20 +356,55 @@ namespace {
 						HMENU hSub = CreatePopupMenu();
                         if (!hSub) continue;
 
-                        // Details
-                        AppendMenuW(hSub, MF_STRING, id, L"Details");
-                        ctx->menuMap->emplace(id, MenuItem{ p.first, DisplayAction::Details });
-                        ++id;
+                        bool isPhysical = (p.first == GUID());
 
-                        // Remove
-                        AppendMenuW(hSub, MF_STRING, id, L"Remove");
-                        ctx->menuMap->emplace(id, MenuItem{ p.first, DisplayAction::Remove });
-                        ++id;
+                        // Set Primary
+                        {
+                            AppendMenuW(hSub, MF_STRING, id, L"Set Primary");
+                            MenuItem it{}; it.guid = p.first; it.action = DisplayAction::SetPrimary;
+                            if (isPhysical) {
+                                // parse GDI name from label: last parenthesized part
+                                size_t l = label.rfind(L'(');
+                                size_t r = label.rfind(L')');
+                                if (l != std::wstring::npos && r != std::wstring::npos && r > l) {
+                                    it.physicalName = label.substr(l+1, r-l-1);
+                                }
+                                it.physicalLabel = label;
+                            }
+                            ctx->menuMap->emplace(id, it);
+                            ++id;
+                        }
+
+                        // Toggle HDR
+                        {
+                            AppendMenuW(hSub, MF_STRING, id, L"Toggle HDR");
+                            MenuItem it{}; it.guid = p.first; it.action = DisplayAction::ToggleHdr;
+                            if (isPhysical) { it.physicalName = label.substr(label.rfind(L'(')+1, label.rfind(L')') - label.rfind(L'(') - 1); it.physicalLabel = label; }
+                            ctx->menuMap->emplace(id, it);
+                            ++id;
+                        }
+
+                        AppendMenuW(hSub, MF_SEPARATOR, 0, nullptr);
+
+                        // Details
+                        {
+                            AppendMenuW(hSub, MF_STRING, id, L"Details");
+                            MenuItem it{}; it.guid = p.first; it.action = DisplayAction::Details;
+                            if (isPhysical) { it.physicalName = label.substr(label.rfind(L'(')+1, label.rfind(L')') - label.rfind(L'(') - 1); it.physicalLabel = label; }
+                            ctx->menuMap->emplace(id, it);
+                            ++id;
+                        }
+
+                        // Remove (only for virtual displays)
+                        if (!isPhysical) {
+                            AppendMenuW(hSub, MF_STRING, id, L"Remove");
+                            ctx->menuMap->emplace(id, MenuItem{ p.first, DisplayAction::Remove });
+                            ++id;
+                        }
 
                         // Append popup submenu for this display with the label
                         AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hSub, label.c_str());
                     }
-
                     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
 
                     // Add submenu for "Add" modes above Exit
@@ -481,15 +522,31 @@ namespace {
 					MenuItem mi = it->second;
 					GUID toActOn = mi.guid;
                     if (mi.action == DisplayAction::Details) {
-                        std::string json;
-                        {
-                            std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
-                            auto res = ctx->controller->Query(toActOn);
-                            json = res.json;
+                        if (!mi.physicalName.empty()) {
+                            // Physical display: build details using DisplayConfigUtils + HdrUtils
+                            std::wstring title = mi.physicalLabel;
+                            std::wstring body = L"";
+                            auto mode = vdc::DisplayConfigUtils::GetCurrentModeForDevice(mi.physicalName);
+                            if (mode) {
+                                body += L"Resolution: " + std::to_wstring(mode->width) + L"x" + std::to_wstring(mode->height) + L"\n";
+                                body += L"Refresh (mHz): " + std::to_wstring(mode->refreshRateMilliHz) + L"\n";
+                            } else {
+                                body += L"Mode: unknown\n";
+                            }
+                            bool hdr = vdc::HdrUtils::IsHdrEnabled(mi.physicalName);
+                            body += L"HDR: "; body += hdr ? L"enabled" : L"disabled"; body += L"\n";
+                            MessageBoxW(hWnd, body.c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
+                        } else {
+                            std::string json;
+                            {
+                                std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
+                                auto res = ctx->controller->Query(toActOn);
+                                json = res.json;
+                            }
+                            std::string formatted = vdc::JsonBuilder::FormatJsonAsList(json);
+                            std::wstring wformatted = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(formatted);
+                            MessageBoxW(hWnd, wformatted.c_str(), L"Display Details", MB_OK | MB_ICONINFORMATION);
                         }
-                        std::string formatted = vdc::JsonBuilder::FormatJsonAsList(json);
-                        std::wstring wformatted = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(formatted);
-                        MessageBoxW(hWnd, wformatted.c_str(), L"Display Details", MB_OK | MB_ICONINFORMATION);
                     }
                     else if (mi.action == DisplayAction::Remove) {
                         bool removed = false;
@@ -510,6 +567,43 @@ namespace {
                         // Launch CLI create flow for the selected mode using typed config
                         LaunchCliCreate(*mi.cfg, hWnd);
                         return 0;
+                    }
+                    else if (mi.action == DisplayAction::SetPrimary) {
+                        if (!mi.physicalName.empty()) {
+                            bool ok = vdc::DisplayConfigUtils::MakeDevicePrimary(mi.physicalName);
+                            if (!ok) MessageBoxW(hWnd, L"Failed to set physical display as primary.", L"Error", MB_OK | MB_ICONERROR);
+                            return 0;
+                        } else {
+                            bool ok = false;
+                            {
+                                std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
+                                auto res = ctx->controller->SetPrimary(toActOn);
+                                ok = res.success;
+                            }
+                            if (!ok) MessageBoxW(hWnd, L"Failed to set display as primary.", L"Error", MB_OK | MB_ICONERROR);
+                            return 0;
+                        }
+                    }
+                    else if (mi.action == DisplayAction::ToggleHdr) {
+                        if (!mi.physicalName.empty()) {
+                            bool cur = vdc::HdrUtils::IsHdrEnabled(mi.physicalName);
+                            bool ok = vdc::HdrUtils::SetHdrState(mi.physicalName, !cur);
+                            if (!ok) MessageBoxW(hWnd, L"Failed to toggle HDR for physical display.", L"Error", MB_OK | MB_ICONERROR);
+                            return 0;
+                        } else {
+                            bool ok = false;
+                            {
+                                std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
+                                auto q = ctx->controller->Query(toActOn);
+                                if (q.success) {
+                                    bool hdr = q.json.find("\"hdr\":true") != std::string::npos;
+                                    auto res = ctx->controller->SetHdr(toActOn, !hdr);
+                                    ok = res.success;
+                                }
+                            }
+                            if (!ok) MessageBoxW(hWnd, L"Failed to toggle HDR for display.", L"Error", MB_OK | MB_ICONERROR);
+                            return 0;
+                        }
                     }
                     else if (mi.action == DisplayAction::Custom) {
                         vdc::VirtualDisplayConfig cfg;
