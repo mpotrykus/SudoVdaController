@@ -690,6 +690,7 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
                 if (kv.count("height")) cfg.height = std::stoi(kv["height"]);
                 if (kv.count("refresh")) cfg.refreshRateMilliHz = std::stoi(kv["refresh"]);
                 if (kv.count("hdr")) cfg.hdr = kv["hdr"] != "0";
+                if (kv.count("primary")) cfg.primary = kv["primary"] != "0";
                 if (kv.count("adapter")) {
                     try { cfg.adapterLuid = std::stoull(kv["adapter"]); } catch(...) {}
                 }

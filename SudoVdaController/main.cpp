@@ -96,7 +96,6 @@ static bool SendToTray(const std::string& message, std::string& outResponse) {
     for (int attempt = 0; attempt < maxAttempts; ++attempt) {
         h = CreateFileW(fullPipe.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
         if (h != INVALID_HANDLE_VALUE) {
-			std::cout << "Connected to tray process on attempt " << (attempt + 1) << "\n";
             break;
         }
         // brief backoff; allow the tray process to create the pipe
@@ -150,21 +149,22 @@ int main(int argc, char** argv) {
         if (arg == "--help" || arg == "-h" || arg == "help") {
             std::cout << "Usage: SudoVdaController <verb> [args]\n";
             std::cout << "Verbs:\n";
-            std::cout << "  create [name]                       Create a virtual display (optional UTF-8 name)\n";
+            std::cout << "  create [name]                        Create a virtual display (optional UTF-8 name)\n";
             std::cout << "      Flags for create:\n";
-            std::cout << "        --width N, --w N               Width in pixels (default 1920)\n";
+            std::cout << "        --width  N, --w N              Width in pixels (default 1920)\n";
             std::cout << "        --height N, --h N              Height in pixels (default 1080)\n";
             std::cout << "        --refresh N or --refresh N.N   Refresh rate; integer is milliHz, float is Hz (e.g. 119.98)\n";
-            std::cout << "        --hdr [0|1]                    Enable/disable HDR (or use --no-hdr)\n";
+            std::cout << "        --hdr                          Enable HDR\n";
+            std::cout << "        --primary                      Make display primary\n";
             std::cout << "        --adapter <id>                 Adapter LUID as decimal or 0xhex\n";
             std::cout << "        --guid <guid>                  Request a specific GUID for the device\n";
-            std::cout << "  remove <guid>                       Remove a virtual display\n";
-            std::cout << "  mode <guid> <w> <h> <refresh> <iso> Set mode (iso: 1=isolated, 0=not)\n";
-            std::cout << "  primary <guid>                      Make display primary\n";
-            std::cout << "  hdr <guid> <0|1>                    Disable/enable HDR\n";
-            std::cout << "  query <guid>                        Query display state\n";
+            std::cout << "  remove <guid>                        Remove a virtual display\n";
+            std::cout << "  mode <guid> <w> <h> <refresh> <iso>  Set mode (iso: 1=isolated, 0=not)\n";
+            std::cout << "  primary <guid>                       Make display primary\n";
+            std::cout << "  hdr <guid> <0|1>                     Disable/enable HDR\n";
+            std::cout << "  query <guid>                         Query display state\n";
             std::cout << "Options:\n";
-            std::cout << "  --help, -h                          Show this help message\n";
+            std::cout << "  --help, -h                           Show this help message\n";
             std::cout << "Examples:\n";
             std::cout << "  SudoVdaController create \"My Display\" --width=2560 --height=1440 --refresh=119.98\n";
             std::cout << "  SudoVdaController create --width 2560 --height 1440 --refresh 119980 --stay\n";
@@ -252,7 +252,10 @@ int main(int argc, char** argv) {
                     catch (...) {}
                 }
                 else if (key == "--hdr") {
-                    if (val.empty()) cfg.hdr = true; else cfg.hdr = val != "0";
+                    cfg.hdr = true;
+                }
+                else if (key == "--primary") {
+                    cfg.primary = true;
                 }
                 else if (key == "--no-hdr") {
                     cfg.hdr = false;
@@ -289,6 +292,7 @@ int main(int argc, char** argv) {
         kv["height"] = std::to_string(cfg.height);
         kv["refresh"] = std::to_string(cfg.refreshRateMilliHz);
         kv["hdr"] = cfg.hdr ? "1" : "0";
+        kv["primary"] = cfg.primary ? "1" : "0";
         if (cfg.adapterLuid) kv["adapter"] = std::to_string(cfg.adapterLuid);
         if (guidOpt) kv["guid"] = vdc::GuidToString(*guidOpt);
 

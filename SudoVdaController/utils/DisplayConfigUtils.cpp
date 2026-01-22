@@ -1,4 +1,4 @@
-#include "../pch.h"
+﻿#include "../pch.h"
 #include "DisplayConfigUtils.h"
 
 #include <windows.h>
@@ -6,6 +6,31 @@
 #include <string>
 #include <iostream>
 #include <cstdint>
+#include <sstream>
+#include <locale>
+#include <codecvt>
+
+// Add it RIGHT HERE
+#ifndef SDC_SET_PRIMARY
+#define SDC_SET_PRIMARY 0x00000010
+#endif
+
+// Optional: other missing flags
+#ifndef SDC_TOPOLOGY_INTERNAL
+#define SDC_TOPOLOGY_INTERNAL 0x00000001
+#endif
+
+#ifndef SDC_TOPOLOGY_CLONE
+#define SDC_TOPOLOGY_CLONE 0x00000002
+#endif
+
+#ifndef SDC_TOPOLOGY_EXTEND
+#define SDC_TOPOLOGY_EXTEND 0x00000004
+#endif
+
+#ifndef SDC_TOPOLOGY_EXTERNAL
+#define SDC_TOPOLOGY_EXTERNAL 0x00000008
+#endif
 
 using namespace vdc;
 using namespace vdisplay;
@@ -125,83 +150,109 @@ bool DisplayConfigUtils::ApplyModeForDevice(const std::wstring& deviceName, int 
     return res == DISP_CHANGE_SUCCESSFUL;
 }
 
-bool DisplayConfigUtils::MakeDevicePrimary(const std::wstring& deviceName) {
-    if (deviceName.empty()) return false;
-
-    // Get the DEVMODE of the device we want as primary (to get its offset)
-    DEVMODEW primaryDevMode{};
-    primaryDevMode.dmSize = sizeof(primaryDevMode);
-    if (!EnumDisplaySettingsW(deviceName.c_str(), ENUM_CURRENT_SETTINGS, &primaryDevMode)) {
+bool DisplayConfigUtils::MakeDevicePrimary(const std::wstring& deviceName)
+{
+    if (deviceName.empty()) {
         return false;
     }
 
-    int offset_x = primaryDevMode.dmPosition.x;
-    int offset_y = primaryDevMode.dmPosition.y;
+    UINT32 pathCount = 0, modeCount = 0;
+    LONG status = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
 
-    // Iterate all display devices and adjust their positions relative to the new primary
-    DISPLAY_DEVICEW displayDevice{};
-    displayDevice.cb = sizeof(displayDevice);
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
 
-    int device_index = 0;
-    std::vector<std::pair<std::wstring, DEVMODEW>> staged;
+    status = QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(),
+        &modeCount, modes.data(), nullptr);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
 
-    // Collect and adjust modes first
-    while (EnumDisplayDevicesW(nullptr, device_index, &displayDevice, 0)) {
-        device_index++;
+    // Find the path whose source GDI name matches deviceName
+    DISPLAYCONFIG_PATH_INFO* primaryPath = nullptr;
 
-        // Only consider active devices
-        if (!(displayDevice.StateFlags & DISPLAY_DEVICE_ACTIVE)) {
-            displayDevice.cb = sizeof(displayDevice);
+    for (auto& path : paths)
+    {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME name = {};
+        name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        name.header.size = sizeof(name);
+        name.header.adapterId = path.sourceInfo.adapterId;
+        name.header.id = path.sourceInfo.id;
+
+        if (DisplayConfigGetDeviceInfo(&name.header) != ERROR_SUCCESS)
             continue;
-        }
 
-        DEVMODEW devMode{};
-        devMode.dmSize = sizeof(devMode);
-        if (!EnumDisplaySettingsW(displayDevice.DeviceName, ENUM_CURRENT_SETTINGS, &devMode)) {
-            displayDevice.cb = sizeof(displayDevice);
+        if (std::wstring(name.viewGdiDeviceName) == deviceName) {
+            primaryPath = &path;
+            break;
+        }
+    }
+
+    if (!primaryPath) {
+        return false;
+    }
+
+    // Helper to get a source mode for a given path, using modeInfoIdx safely
+    auto getSourceModeForPath = [&](DISPLAYCONFIG_PATH_INFO& path) -> DISPLAYCONFIG_MODE_INFO*
+        {
+            if (path.sourceInfo.modeInfoIdx == DISPLAYCONFIG_PATH_MODE_IDX_INVALID)
+                return nullptr;
+
+            if (path.sourceInfo.modeInfoIdx >= modeCount)
+                return nullptr;
+
+            DISPLAYCONFIG_MODE_INFO* m = &modes[path.sourceInfo.modeInfoIdx];
+            if (m->infoType != DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE)
+                return nullptr;
+
+            return m;
+        };
+
+    // Set primary display's position to (0,0)
+    DISPLAYCONFIG_MODE_INFO* primarySourceMode = getSourceModeForPath(*primaryPath);
+    if (!primarySourceMode) {
+        return false;
+    }
+
+    primarySourceMode->sourceMode.position.x = 0;
+    primarySourceMode->sourceMode.position.y = 0;
+
+    int primaryWidth = static_cast<int>(primarySourceMode->sourceMode.width);
+    int nextX = primaryWidth;
+
+    // Reposition all other displays to the right of the primary
+    for (auto& path : paths)
+    {
+        if (&path == primaryPath)
             continue;
-        }
 
-        // Adjust positions: shift everything so chosen device becomes 0,0
-        devMode.dmPosition.x -= offset_x;
-        devMode.dmPosition.y -= offset_y;
-        devMode.dmFields = devMode.dmFields | DM_POSITION;
+        DISPLAYCONFIG_MODE_INFO* srcMode = getSourceModeForPath(path);
+        if (!srcMode)
+            continue; // no source mode → skip
 
-        staged.emplace_back(std::wstring(displayDevice.DeviceName), devMode);
+        srcMode->sourceMode.position.x = nextX;
+        srcMode->sourceMode.position.y = 0;
 
-        displayDevice.cb = sizeof(displayDevice);
+        nextX += static_cast<int>(srcMode->sourceMode.width);
     }
 
-    // Apply all non-primary updates first with CDS_UPDATEREGISTRY | CDS_NORESET
-    for (auto& p : staged) {
-        const std::wstring& name = p.first;
-        DEVMODEW& dm = p.second;
+    // Apply the new topology atomically
+    status = SetDisplayConfig(
+        pathCount,
+        paths.data(),
+        modeCount,
+        modes.data(),
+        SDC_APPLY |
+        SDC_USE_SUPPLIED_DISPLAY_CONFIG |
+        SDC_SAVE_TO_DATABASE
+    );
 
-        // If this is the device to be primary, skip here, we'll apply with CDS_SET_PRIMARY below.
-        if (name == deviceName) continue;
-
-        LONG res = ChangeDisplaySettingsExW(name.c_str(), &dm, nullptr, CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
-        if (res != DISP_CHANGE_SUCCESSFUL) {
-            return false;
-        }
-    }
-
-    // Now set the chosen device as primary at (0,0)
-    DEVMODEW primaryDm{};
-    primaryDm.dmSize = sizeof(primaryDm);
-    if (!EnumDisplaySettingsW(deviceName.c_str(), ENUM_CURRENT_SETTINGS, &primaryDm)) {
-        return false;
-    }
-    primaryDm.dmPosition.x = 0;
-    primaryDm.dmPosition.y = 0;
-    primaryDm.dmFields = primaryDm.dmFields | DM_POSITION;
-
-    LONG res = ChangeDisplaySettingsExW(deviceName.c_str(), &primaryDm, nullptr, CDS_UPDATEREGISTRY | CDS_NORESET | CDS_SET_PRIMARY, nullptr);
-    if (res != DISP_CHANGE_SUCCESSFUL) {
+    if (status != ERROR_SUCCESS) {
         return false;
     }
 
-    // Commit all staged changes
-    res = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
-    return res == DISP_CHANGE_SUCCESSFUL;
+    return true;
 }

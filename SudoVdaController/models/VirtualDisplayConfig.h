@@ -10,6 +10,7 @@ namespace vdc {
         int height = 1080;
         int refreshRateMilliHz = 60000;
         bool hdr = false;
+        bool primary = false;
         uint64_t adapterLuid = 0;
     };
 

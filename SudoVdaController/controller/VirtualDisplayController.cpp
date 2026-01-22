@@ -36,11 +36,16 @@ ControllerResult VirtualDisplayController::CreateDisplay(const VirtualDisplayCon
     // Create the session object
     auto session = std::make_unique<vdisplay::VirtualDisplaySession>(g, *deviceName, cfg);
 
-    // If the config requested HDR, try to enable it now.
     if (cfg.hdr && !session->SetHdr(true)) {
         std::string devUtf8 = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(*deviceName);
         std::cerr << "[Controller] WARNING: failed to enable HDR on device: " << devUtf8 << "\n";
         jb.Add("warning", "failed to enable hdr on device");
+    }
+
+    if (cfg.primary && !session->SetPrimary()) {
+        std::string devUtf8 = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(*deviceName);
+        std::cerr << "[Controller] WARNING: failed to set as primary on device: " << devUtf8 << "\n";
+        jb.Add("warning", "failed to set device as primary");
     }
 
     // Store session
