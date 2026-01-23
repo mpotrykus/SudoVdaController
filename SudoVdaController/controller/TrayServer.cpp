@@ -668,6 +668,15 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
     g_ctx.controllerMutex = &controllerMutex; // No-op reassignment for consistency
     g_ctx.menuMap = &menuMap; // No-op reassignment for consistency
 
+    // On startup, attempt to apply persisted topology to restore enabled/disabled state
+    try {
+        vdc::ConfigStore cs;
+        auto topo = cs.GetTopologyMap();
+        if (!topo.empty()) {
+            vdc::DisplayConfigUtils::ApplyTopologyFromStore(topo);
+        }
+    } catch(...) {}
+
     // Start pipe server thread
     constexpr wchar_t READY_EVENT_NAME[] = L"SudoVdaTray_ReadyEvent";
     // shutdown event used to interrupt ConnectNamedPipe waits

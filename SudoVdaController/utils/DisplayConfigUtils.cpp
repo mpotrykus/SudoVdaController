@@ -44,9 +44,14 @@
 
 using namespace vdc;
 using namespace vdisplay;
+// For ApplyTopologyFromStore
+#include <map>
 
 // Helper: read MonitorFriendlyDeviceName from registry for a device instance id
 #include <optional>
+
+// Implementation of ApplyTopologyFromStore is placed after helper functions to avoid mixing
+// inside the middle of GetMonitorFriendlyNameFromDeviceInstanceId implementation.
 
 std::optional<std::wstring> DisplayConfigUtils::GetMonitorFriendlyNameFromDeviceInstanceId(const std::wstring& deviceInstanceId) {
     if (deviceInstanceId.empty()) return std::nullopt;
@@ -95,6 +100,8 @@ std::optional<std::wstring> DisplayConfigUtils::GetMonitorFriendlyNameFromDevice
                                             if (coInit) CoUninitialize();
                                             return name;
                                         }
+
+
                                     }
                                 }
                                 VariantClear(&varName);
@@ -157,6 +164,59 @@ std::optional<std::wstring> DisplayConfigUtils::GetMonitorFriendlyNameFromDevice
     }
 
     return std::nullopt;
+}
+
+// Implementation of ApplyTopologyFromStore
+bool DisplayConfigUtils::ApplyTopologyFromStore(const std::map<std::string,bool>& topologyMap) {
+    if (topologyMap.empty()) return true;
+
+    UINT32 pathCount = 0, modeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) return false;
+
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+    if (QueryDisplayConfig(QDC_ALL_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) return false;
+
+    std::vector<DISPLAYCONFIG_PATH_INFO> newPaths;
+    newPaths.reserve(pathCount);
+
+    for (UINT32 i = 0; i < pathCount; ++i) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
+        src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        src.header.size = sizeof(src);
+        src.header.adapterId = paths[i].sourceInfo.adapterId;
+        src.header.id = paths[i].sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) {
+            // keep path if we cannot query name
+            newPaths.push_back(paths[i]);
+            continue;
+        }
+
+        // convert to utf8 for map lookup
+        std::wstring gdi = src.viewGdiDeviceName;
+        std::string gdiUtf;
+        try {
+            gdiUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(gdi);
+        } catch(...) { gdiUtf = ""; }
+
+        auto it = topologyMap.find(gdiUtf);
+        if (it != topologyMap.end() && it->second == false) {
+            // skip this path to disable this GDI device
+            continue;
+        }
+        newPaths.push_back(paths[i]);
+    }
+
+    // If nothing changed, nothing to apply
+    if (newPaths.size() == pathCount) return true;
+
+    LONG status = SetDisplayConfig(
+        static_cast<UINT32>(newPaths.size()), newPaths.data(),
+        modeCount, modes.data(),
+        SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE
+    );
+
+    return status == ERROR_SUCCESS;
 }
 
 std::optional<std::wstring> DisplayConfigUtils::GetMonitorFriendlyNameForGdiName(const std::wstring& gdiName) {

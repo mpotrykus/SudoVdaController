@@ -11,6 +11,7 @@ namespace vdisplay {
     class VirtualDisplaySession {
     public:
         VirtualDisplaySession(const GUID& guid, const std::wstring& deviceName, const vdc::VirtualDisplayConfig& config);
+        void SetGuid(const GUID& g) { guid_ = g; }
         ~VirtualDisplaySession();
 
         const GUID& GetGuid() const;

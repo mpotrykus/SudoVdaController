@@ -6,6 +6,7 @@
 #include "VirtualDisplaySession.h"
 #include "../utils/DisplayConfigUtils.h"
 #include "../utils/HdrUtils.h"
+#include "../utils/ConfigStore.h"
 
 #include <thread>
 #include <chrono>
@@ -20,6 +21,8 @@ using namespace vdisplay;
 VirtualDisplayController::VirtualDisplayController() {
     vda_ = std::make_unique<VdaSession>();
     vda_->Open();
+    // load config store
+    try { configStore_ = std::make_unique<ConfigStore>(); } catch(...) {}
 }
 
 VirtualDisplayController::~VirtualDisplayController() = default;
@@ -30,6 +33,20 @@ ControllerResult VirtualDisplayController::CreateDisplay(const VirtualDisplayCon
     // so menus can show a reasonable label. The driver typically assigns "SudoMakerVDD".
     VirtualDisplayConfig cfgCopy = cfg;
     if (cfgCopy.deviceName.empty()) cfgCopy.deviceName = L"SudoMakerVDD";
+
+    // If we have a stored mapping for this friendly name+mode and the caller did not supply a GUID,
+    // prefer to reuse the stored GUID for that exact combo so the driver receives the stable identity.
+    try {
+        if (guidOpt == std::nullopt && configStore_) {
+            auto mappedOpt = configStore_->GetByNameAndMode(cfgCopy.deviceName, cfgCopy.width, cfgCopy.height, cfgCopy.refreshRateMilliHz);
+            if (mappedOpt.has_value() && !mappedOpt->guid.empty()) {
+                auto maybeG = vdc::StringToGuid(mappedOpt->guid);
+                if (maybeG.has_value()) {
+                    g = *maybeG;
+                }
+            }
+        }
+    } catch(...) {}
 
     // Ask VDA to add display (stub behavior)
     auto deviceName = vda_->AddVirtualDisplay(g, cfgCopy);
@@ -43,6 +60,36 @@ ControllerResult VirtualDisplayController::CreateDisplay(const VirtualDisplayCon
     // Store the session. Use the driver-returned deviceName as the GDI name and
     // keep the friendly name from cfgCopy so the UI can display it.
     auto session = std::make_unique<vdisplay::VirtualDisplaySession>(g, *deviceName, cfgCopy);
+
+    // If we have a config store mapping for this friendly name, apply stored mode
+    //try {
+    //    if (configStore_) {
+    //        auto mappedOpt = configStore_->GetByName(cfgCopy.deviceName);
+    //        if (mappedOpt.has_value()) {
+    //            auto mapped = mappedOpt.value();
+    //            // try to apply stored mode � retry for a short window because the OS may not be ready
+    //            if (mapped.width > 0 && mapped.height > 0 && mapped.refresh > 0) {
+    //                bool applied = false;
+    //                const int maxAttempts = 20; // ~5s at 250ms
+    //                for (int a = 0; a < maxAttempts; ++a) {
+    //                    if (session->SetMode(mapped.width, mapped.height, mapped.refresh, true)) { applied = true; break; }
+    //                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    //                }
+    //                if (!applied) {
+    //                    std::cerr << "[Controller] Warning: failed to apply stored mode for " << std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(cfgCopy.deviceName) << " after retries\n";
+    //                }
+    //            }
+    //            // If stored GUID available and we didn't receive guidOpt, prefer reusing it
+    //            if (guidOpt == std::nullopt && !mapped.guid.empty()) {
+    //                auto maybeG = vdc::StringToGuid(mapped.guid);
+    //                if (maybeG.has_value()) {
+    //                    g = *maybeG;
+    //                    session->SetGuid(g);
+    //                }
+    //            }
+    //        }
+    //    }
+    //} catch(...) {}
 
     if (cfg.hdr && !session->SetHdr(true)) {
         std::string devUtf8 = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(*deviceName);
@@ -58,6 +105,30 @@ ControllerResult VirtualDisplayController::CreateDisplay(const VirtualDisplayCon
 
     // Store session
     sessions_.emplace(g, std::move(session));
+    // Persist mapping: record deviceName -> guid and current mode (if available)
+    try {
+        if (configStore_) {
+            StoredMapping m;
+            m.guid = vdc::GuidToString(g);
+            m.deviceName = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(cfgCopy.deviceName);
+            auto mode = sessions_[g]->GetCurrentMode();
+            if (mode) {
+                m.width = mode->width;
+                m.height = mode->height;
+                m.refresh = mode->refreshRateMilliHz;
+            }
+            // Only set mapping if exact combo (name+mode) not already present. Use composite key name|w|h|r
+            std::string composite = m.deviceName + "|" + std::to_string(m.width) + "x" + std::to_string(m.height) + "@" + std::to_string(m.refresh);
+            // We store under the friendly name key but only overwrite if guid differs for this exact mode
+            auto existing = configStore_->GetByNameAndMode(cfgCopy.deviceName, cfgCopy.width, cfgCopy.height, cfgCopy.refreshRateMilliHz);
+            if (!existing.has_value()) {
+                configStore_->SetMapping(cfgCopy.deviceName, m);
+            }
+            // Also mark topology: this GDI device is enabled now. Use the driver-returned GDI device name
+            try { configStore_->SetTopologyEntry(*deviceName, true); } catch(...) {}
+            // try { configStore_->SetTopologyEntry(cfg.deviceName, true); } catch(...) {}
+        }
+    } catch(...) {}
     jb.Add("guid", GuidToString(g));
     jb.Add("device", std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(*deviceName));
     jb.AddRaw("success", "true");
@@ -71,6 +142,15 @@ ControllerResult VirtualDisplayController::RemoveDisplay(const GUID& guid) {
         jb.Add("error", "not found");
         return { false, "not found", jb.Build() };
     }
+    // Before removing, record topology: mark the physical GDI name as enabled/disabled state
+    try {
+        if (configStore_) {
+            auto dev = it->second->GetDeviceName();
+            // when removing a virtual display, mark its GDI device as disabled
+            configStore_->SetTopologyEntry(dev, false);
+        }
+    } catch(...) {}
+
     if (!vda_->RemoveVirtualDisplay(guid)) {
         jb.Add("error", "driver remove failed");
         return { false, "driver remove failed", jb.Build() };

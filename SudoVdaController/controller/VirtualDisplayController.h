@@ -8,6 +8,7 @@
 #include "VirtualDisplaySession.h"
 #include "../models/VirtualDisplayConfig.h"
 #include "../utils/GuidUtils.h"
+#include "../utils/ConfigStore.h"
 
 namespace vdc {
 
@@ -38,6 +39,7 @@ namespace vdc {
     private:
         std::unique_ptr<VdaSession> vda_;
         std::map<GUID, std::unique_ptr<vdisplay::VirtualDisplaySession>, guid_less> sessions_;
+        std::unique_ptr<ConfigStore> configStore_;
     };
 
 } // namespace vdc

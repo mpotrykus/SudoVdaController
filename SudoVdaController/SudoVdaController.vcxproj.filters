@@ -43,6 +43,7 @@
       <Filter>controller</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="utils\ConfigStore.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="utils\DisplayConfigUtils.h">
@@ -85,5 +86,6 @@
       <Filter>controller</Filter>
     </ClInclude>
     <ClInclude Include="pch.h" />
+    <ClInclude Include="utils\ConfigStore.h" />
   </ItemGroup>
 </Project>

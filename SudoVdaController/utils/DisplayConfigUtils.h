@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <map>
 #include <optional>
 #include <windows.h>
 #include "../models/VirtualDisplayTypes.h"
@@ -15,6 +16,9 @@ namespace vdc {
         static std::optional<std::wstring> GetMonitorFriendlyNameFromDeviceInstanceId(const std::wstring& deviceInstanceId);
         // Retrieve monitor friendly name for a GDI device name (e.g. "\\.\DISPLAY1") using DisplayConfig APIs
         static std::optional<std::wstring> GetMonitorFriendlyNameForGdiName(const std::wstring& gdiName);
+        // Apply topology map (GDI name -> enabled) persisted in ConfigStore. This will disable any
+        // currently-active display paths whose GDI name is present and marked as false.
+        static bool ApplyTopologyFromStore(const std::map<std::string,bool>& topologyMap);
     };
 
 } // namespace vdc
