@@ -30,6 +30,11 @@
 // here avoids modifying project files and keeps the linker flags in-source.
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3d11.lib")
+// Link GDI+ for tray icon bitmap helpers
+#pragma comment(lib, "Gdiplus.lib")
+
+// GDI+ headers used by tray server / icon helpers
+#include <gdiplus.h>
 
 // Standard library
 #include <cstdint>

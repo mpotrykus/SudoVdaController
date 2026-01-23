@@ -8,6 +8,7 @@
 #include "../utils/HdrUtils.h"
 #include "../utils/ConfigStore.h"
 
+
 #include <thread>
 #include <chrono>
 #include <iostream>
@@ -38,12 +39,76 @@ ControllerResult VirtualDisplayController::CreateDisplay(const VirtualDisplayCon
     // prefer to reuse the stored GUID for that exact combo so the driver receives the stable identity.
     try {
         if (guidOpt == std::nullopt && configStore_) {
+            // Try exact friendly name+mode match first
             auto mappedOpt = configStore_->GetByNameAndMode(cfgCopy.deviceName, cfgCopy.width, cfgCopy.height, cfgCopy.refreshRateMilliHz);
             if (mappedOpt.has_value() && !mappedOpt->guid.empty()) {
                 auto maybeG = vdc::StringToGuid(mappedOpt->guid);
-                if (maybeG.has_value()) {
-                    g = *maybeG;
-                }
+                if (maybeG.has_value()) { g = *maybeG; }
+            } else {
+                // Otherwise attempt identifier-based match: EDID -> WMI -> monitorDevicePath
+                try {
+                    std::unordered_set<std::string> ids;
+                    // get driver-returned deviceName from the (not yet created) device; use cfgCopy.deviceName? use current system
+                    // attempt to query DisplayConfig for the GDI name that will correspond to the new device; use deviceName after creation
+                    // We will try to query using existing system GDI names matching the friendly name
+                    // collect candidates by enumerating current DisplayConfig paths and looking for monitorDevicePath/friendly
+                    UINT32 pathCount=0, modeCount=0;
+                    if (GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &pathCount, &modeCount) == ERROR_SUCCESS && pathCount>0) {
+                        std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+                        std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+                        if (QueryDisplayConfig(QDC_ALL_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) == ERROR_SUCCESS) {
+                            for (UINT32 i=0;i<pathCount;++i) {
+                                DISPLAYCONFIG_SOURCE_DEVICE_NAME src{}; src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME; src.header.size = sizeof(src);
+                                src.header.adapterId = paths[i].sourceInfo.adapterId; src.header.id = paths[i].sourceInfo.id;
+                                if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) continue;
+                                std::wstring gdi = src.viewGdiDeviceName;
+                                std::string gdiUtf;
+                                try { gdiUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(gdi); } catch(...) { gdiUtf = ""; }
+                                for (auto &c: gdiUtf) c = (char)tolower((unsigned char)c);
+                                // If friendly name matches requested friendly name, collect identifiers
+                                try {
+                                    auto fn = vdc::DisplayConfigUtils::GetMonitorFriendlyNameForGdiName(gdi);
+                                    std::string fnUtf;
+                                    try { fnUtf = fn ? std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(*fn) : std::string(); } catch(...) { fnUtf = ""; }
+                                    for (auto &c: fnUtf) c = (char)tolower((unsigned char)c);
+                                    std::string targetFriendly;
+                                    try { targetFriendly = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(cfgCopy.deviceName); } catch(...) { targetFriendly = ""; }
+                                    for (auto &c: targetFriendly) c = (char)tolower((unsigned char)c);
+                                    if (!targetFriendly.empty() && fnUtf == targetFriendly) {
+                                        DISPLAYCONFIG_TARGET_DEVICE_NAME tname{}; tname.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME; tname.header.size = sizeof(tname);
+                                        tname.header.adapterId = paths[i].targetInfo.adapterId; tname.header.id = paths[i].targetInfo.id;
+                                        if (DisplayConfigGetDeviceInfo(&tname.header) == ERROR_SUCCESS) {
+                                            if (tname.monitorDevicePath && tname.monitorDevicePath[0]) {
+                                                std::string p;
+                                                try { p = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(std::wstring(tname.monitorDevicePath)); } catch(...) { p = ""; }
+                                                for (auto &c: p) c = (char)tolower((unsigned char)c);
+                                                ids.insert(p);
+                                                const std::string pref = "\\\\?\\";
+                                                if (p.rfind(pref,0) == 0) ids.insert(p.substr(pref.size()));
+                                                try {
+                                                    std::wstring inst = std::wstring(tname.monitorDevicePath);
+                                                    const std::wstring ipref = L"\\\\?\\";
+                                                    if (inst.rfind(ipref,0) == 0) inst = inst.substr(ipref.size());
+                                                    auto ed = vdc::DisplayConfigUtils::GetEdidHexForDeviceInstanceId(inst);
+                                                    if (ed) { std::string e = *ed; for (auto &c: e) c = (char)tolower((unsigned char)c); ids.insert(e); }
+                                                    auto wk = vdc::DisplayConfigUtils::GetWmiKeyForDeviceInstanceId(inst);
+                                                    if (wk) { std::string w = *wk; for (auto &c: w) c = (char)tolower((unsigned char)c); ids.insert(w); }
+                                                } catch(...) {}
+                                            }
+                                        }
+                                    }
+                                } catch(...) {}
+                            }
+                        }
+                    }
+                    if (!ids.empty()) {
+                        auto byId = configStore_->FindMappingByIdentifiers(ids);
+                        if (byId) {
+                            auto maybeG = vdc::StringToGuid(byId->guid);
+                            if (maybeG.has_value()) g = *maybeG;
+                        }
+                    }
+                } catch(...) {}
             }
         }
     } catch(...) {}
@@ -60,36 +125,6 @@ ControllerResult VirtualDisplayController::CreateDisplay(const VirtualDisplayCon
     // Store the session. Use the driver-returned deviceName as the GDI name and
     // keep the friendly name from cfgCopy so the UI can display it.
     auto session = std::make_unique<vdisplay::VirtualDisplaySession>(g, *deviceName, cfgCopy);
-
-    // If we have a config store mapping for this friendly name, apply stored mode
-    //try {
-    //    if (configStore_) {
-    //        auto mappedOpt = configStore_->GetByName(cfgCopy.deviceName);
-    //        if (mappedOpt.has_value()) {
-    //            auto mapped = mappedOpt.value();
-    //            // try to apply stored mode � retry for a short window because the OS may not be ready
-    //            if (mapped.width > 0 && mapped.height > 0 && mapped.refresh > 0) {
-    //                bool applied = false;
-    //                const int maxAttempts = 20; // ~5s at 250ms
-    //                for (int a = 0; a < maxAttempts; ++a) {
-    //                    if (session->SetMode(mapped.width, mapped.height, mapped.refresh, true)) { applied = true; break; }
-    //                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
-    //                }
-    //                if (!applied) {
-    //                    std::cerr << "[Controller] Warning: failed to apply stored mode for " << std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(cfgCopy.deviceName) << " after retries\n";
-    //                }
-    //            }
-    //            // If stored GUID available and we didn't receive guidOpt, prefer reusing it
-    //            if (guidOpt == std::nullopt && !mapped.guid.empty()) {
-    //                auto maybeG = vdc::StringToGuid(mapped.guid);
-    //                if (maybeG.has_value()) {
-    //                    g = *maybeG;
-    //                    session->SetGuid(g);
-    //                }
-    //            }
-    //        }
-    //    }
-    //} catch(...) {}
 
     if (cfg.hdr && !session->SetHdr(true)) {
         std::string devUtf8 = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(*deviceName);
@@ -116,17 +151,155 @@ ControllerResult VirtualDisplayController::CreateDisplay(const VirtualDisplayCon
                 m.width = mode->width;
                 m.height = mode->height;
                 m.refresh = mode->refreshRateMilliHz;
-            }
-            // Only set mapping if exact combo (name+mode) not already present. Use composite key name|w|h|r
-            std::string composite = m.deviceName + "|" + std::to_string(m.width) + "x" + std::to_string(m.height) + "@" + std::to_string(m.refresh);
+            } 
+
+                    // Attempt to capture persistent identifiers: monitorDevicePath and EDID when available
+                    try {
+                        auto mdp = vdc::DisplayConfigUtils::GetMonitorDevicePathForGdiName(*deviceName);
+                        if (mdp) m.monitorDevicePath = *mdp;
+                        // If we have a monitor device path, try to get EDID from registry
+                        if (m.monitorDevicePath.empty()) {
+                            // try target device instance id via QueryDisplayConfig target info
+                            // best-effort: iterate display paths to find matching source and read target.monitorDevicePath
+                            UINT32 pCount=0, mCount=0;
+                            if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pCount, &mCount) == ERROR_SUCCESS) {
+                                std::vector<DISPLAYCONFIG_PATH_INFO> paths(pCount);
+                                std::vector<DISPLAYCONFIG_MODE_INFO> modes(mCount);
+                                if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pCount, paths.data(), &mCount, modes.data(), nullptr) == ERROR_SUCCESS) {
+                                    for (UINT32 pi=0; pi<pCount; ++pi) {
+                                        DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
+                                        src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                                        src.header.size = sizeof(src);
+                                        src.header.adapterId = paths[pi].sourceInfo.adapterId;
+                                        src.header.id = paths[pi].sourceInfo.id;
+                                        if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) continue;
+                                        if (std::wstring(src.viewGdiDeviceName) != *deviceName) continue;
+                                        DISPLAYCONFIG_TARGET_DEVICE_NAME tname{};
+                                        tname.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+                                        tname.header.size = sizeof(tname);
+                                        tname.header.adapterId = paths[pi].targetInfo.adapterId;
+                                        tname.header.id = paths[pi].targetInfo.id;
+                                        if (DisplayConfigGetDeviceInfo(&tname.header) == ERROR_SUCCESS) {
+                                            if (tname.monitorDevicePath && tname.monitorDevicePath[0]) m.monitorDevicePath = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(std::wstring(tname.monitorDevicePath));
+                                            if (m.monitorDevicePath.empty() && tname.monitorFriendlyDeviceName && tname.monitorFriendlyDeviceName[0]) m.deviceName = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(std::wstring(tname.monitorFriendlyDeviceName));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Try EDID read via device instance id if monitorDevicePath contains a device instance id
+                        if (!m.monitorDevicePath.empty()) {
+                            std::wstring inst = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(m.monitorDevicePath);
+                            const std::wstring prefix = L"\\\\?\\";
+                            if (inst.rfind(prefix,0) == 0) inst = inst.substr(prefix.size());
+                            auto ed = vdc::DisplayConfigUtils::GetEdidHexForDeviceInstanceId(inst);
+                            if (ed) m.edid = *ed;
+                        }
+                    // If EDID still empty, try fallback: enumerate display devices to find monitor DeviceID and read EDID
+                    if (m.edid.empty()) {
+                        DISPLAY_DEVICEW adapter{}; adapter.cb = sizeof(adapter);
+                        for (DWORD ai = 0; EnumDisplayDevicesW(NULL, ai, &adapter, 0); ++ai) {
+                            std::wstring adapterName = adapter.DeviceName ? adapter.DeviceName : L"";
+                            if (adapterName != *deviceName) { adapter.cb = sizeof(adapter); continue; }
+                            // enumerate monitors on this adapter
+                            DISPLAY_DEVICEW mon{}; mon.cb = sizeof(mon);
+                            for (DWORD mi = 0; EnumDisplayDevicesW(adapterName.c_str(), mi, &mon, 0); ++mi) {
+                                std::wstring devId = mon.DeviceID ? mon.DeviceID : L"";
+                                if (devId.empty()) continue;
+                                // convert DeviceID like "MONITOR\\..." into instance id form
+                                // try directly
+                                auto ed = vdc::DisplayConfigUtils::GetEdidHexForDeviceInstanceId(devId);
+                                if (!ed) {
+                                    // try replacing '#' with '\\' as alternate form
+                                    std::wstring alt = devId;
+                                    for (auto &c : alt) if (c == L'#') c = L'\\';
+                                    ed = vdc::DisplayConfigUtils::GetEdidHexForDeviceInstanceId(alt);
+                                }
+                                if (ed) { m.edid = *ed; break; }
+                                mon.cb = sizeof(mon);
+                            }
+                            adapter.cb = sizeof(adapter);
+                            if (!m.edid.empty()) break;
+                        }
+                    }
+                    } catch(...) {}
+
             // We store under the friendly name key but only overwrite if guid differs for this exact mode
             auto existing = configStore_->GetByNameAndMode(cfgCopy.deviceName, cfgCopy.width, cfgCopy.height, cfgCopy.refreshRateMilliHz);
             if (!existing.has_value()) {
                 configStore_->SetMapping(cfgCopy.deviceName, m);
             }
-            // Also mark topology: this GDI device is enabled now. Use the driver-returned GDI device name
-            try { configStore_->SetTopologyEntry(*deviceName, true); } catch(...) {}
-            // try { configStore_->SetTopologyEntry(cfg.deviceName, true); } catch(...) {}
+            // Always ensure the mapping GUID is present in the topology so newly-created virtual displays
+            // can be discovered even when an existing mapping already existed for the same friendly+mode.
+            try {
+                std::wstring guidW = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(m.guid);
+                configStore_->SetTopologyEntry(guidW, true);
+            } catch(...) {}
+
+            // Persist WMI key if available as fallback identifier
+            try {
+                if (!m.monitorDevicePath.empty()) {
+                    std::wstring inst = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(m.monitorDevicePath);
+                    const std::wstring prefix = L"\\\\?\\";
+                    if (inst.rfind(prefix,0) == 0) inst = inst.substr(prefix.size());
+                    auto wk = vdc::DisplayConfigUtils::GetWmiKeyForDeviceInstanceId(inst);
+                    if (wk) m.wmiKey = *wk;
+                }
+            } catch(...) {}
+
+            // Also mark topology in the mapping: set this mapping to enable the newly created device
+            // and disable other currently-active GDIs so restoring this mapping will leave only it enabled.
+            try {
+                // Build desired mapping-only topology: enable the newly-created device, disable all other active GDI names
+                std::map<std::string,bool> desired;
+                UINT32 pathCount = 0, modeCount = 0;
+                if (GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &pathCount, &modeCount) == ERROR_SUCCESS && pathCount > 0) {
+                    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+                    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+                    if (QueryDisplayConfig(QDC_ALL_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) == ERROR_SUCCESS) {
+                        for (UINT32 i = 0; i < pathCount; ++i) {
+                            DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
+                            src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                            src.header.size = sizeof(src);
+                            src.header.adapterId = paths[i].sourceInfo.adapterId;
+                            src.header.id = paths[i].sourceInfo.id;
+                            if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) continue;
+                            std::wstring gdi = src.viewGdiDeviceName;
+                            std::string gdiUtf;
+                            try { gdiUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(gdi); } catch(...) { gdiUtf = ""; }
+                            for (auto &c : gdiUtf) c = (char)tolower((unsigned char)c);
+                            // default: disable others
+                            desired[gdiUtf] = false;
+                        }
+                    }
+                }
+                // ensure the created device is enabled (add if missing)
+                std::string createdUtf;
+                try { createdUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(*deviceName); } catch(...) { createdUtf = ""; }
+                for (auto &c : createdUtf) c = (char)tolower((unsigned char)c);
+                desired[createdUtf] = true;
+
+                // Do not persist the "desired" map yet; apply merged topology first and persist only on success.
+                // Apply merged topology (global + per-mapping) to respect other persisted entries.
+                // Log the merged topology for diagnostics.
+                const int maxAttempts = 10;
+                const std::chrono::milliseconds waitInterval(200);
+                for (int a = 0; a < maxAttempts; ++a) {
+                    try {
+                        auto toApply = configStore_->GetCombinedTopology(configStore_->GetTopologyMergePolicyDisabledWins());
+                        // diagnostic: print toApply contents
+                        std::cerr << "[Controller] Applying merged topology:";
+                        for (const auto &kv : toApply) std::cerr << " " << kv.first << ":" << (kv.second?"1":"0");
+                        std::cerr << "\n";
+                        if (vdc::DisplayConfigUtils::ApplyTopologyFromStore(toApply)) {
+                            // Persist merged topology back into mapping so future recreates restore same state
+                            try { configStore_->UpdateMappingTopologyFromCombined(g, toApply); } catch(...) {}
+                            break;
+                        }
+                    } catch(...) {}
+                    std::this_thread::sleep_for(waitInterval);
+                }
+            } catch(...) {}
         }
     } catch(...) {}
     jb.Add("guid", GuidToString(g));
@@ -146,8 +319,8 @@ ControllerResult VirtualDisplayController::RemoveDisplay(const GUID& guid) {
     try {
         if (configStore_) {
             auto dev = it->second->GetDeviceName();
-            // when removing a virtual display, mark its GDI device as disabled
-            configStore_->SetTopologyEntry(dev, false);
+            // when removing a virtual display, mark its GDI device as disabled (update mapping)
+            configStore_->UpdateTopologyForGdi(guid, dev, false);
         }
     } catch(...) {}
 

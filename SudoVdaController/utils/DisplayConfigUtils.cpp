@@ -11,6 +11,9 @@
 #include <codecvt>
 #include <setupapi.h>
 #include <cfgmgr32.h>
+#include <unordered_map>
+#include <unordered_set>
+#include <cctype>
 #pragma comment(lib, "setupapi.lib")
 // WMI
 #include <comdef.h>
@@ -102,6 +105,10 @@ std::optional<std::wstring> DisplayConfigUtils::GetMonitorFriendlyNameFromDevice
                                         }
 
 
+
+
+
+
                                     }
                                 }
                                 VariantClear(&varName);
@@ -166,19 +173,257 @@ std::optional<std::wstring> DisplayConfigUtils::GetMonitorFriendlyNameFromDevice
     return std::nullopt;
 }
 
+// Helper wrappers implemented here to avoid requiring ToUtf8 visibility in header.
+static std::string ToUtf8Local(const std::wstring& w) {
+    if (w.empty()) return std::string();
+    int sz = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), NULL, 0, NULL, NULL);
+    if (sz <= 0) return std::string();
+    std::string out; out.resize(sz);
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &out[0], sz, NULL, NULL);
+    return out;
+}
+
+std::optional<std::string> DisplayConfigUtils::GetMonitorDevicePathForGdiName(const std::wstring& gdiName) {
+    if (gdiName.empty()) return std::nullopt;
+    const UINT32 queries[2] = { QDC_ONLY_ACTIVE_PATHS, QDC_ALL_PATHS };
+    for (UINT qi = 0; qi < _countof(queries); ++qi) {
+        UINT32 qflag = queries[qi];
+        UINT32 pathCount = 0, modeCount = 0;
+        if (GetDisplayConfigBufferSizes(qflag, &pathCount, &modeCount) != ERROR_SUCCESS) continue;
+        if (pathCount == 0) continue;
+        std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+        std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+        if (QueryDisplayConfig(qflag, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) continue;
+        for (UINT32 i = 0; i < pathCount; ++i) {
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
+            src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            src.header.size = sizeof(src);
+            src.header.adapterId = paths[i].sourceInfo.adapterId;
+            src.header.id = paths[i].sourceInfo.id;
+            if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) continue;
+            if (std::wstring(src.viewGdiDeviceName) != gdiName) continue;
+            DISPLAYCONFIG_TARGET_DEVICE_NAME tname{};
+            tname.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+            tname.header.size = sizeof(tname);
+            tname.header.adapterId = paths[i].targetInfo.adapterId;
+            tname.header.id = paths[i].targetInfo.id;
+            if (DisplayConfigGetDeviceInfo(&tname.header) == ERROR_SUCCESS) {
+                if (tname.monitorDevicePath && tname.monitorDevicePath[0]) return ToUtf8Local(std::wstring(tname.monitorDevicePath));
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> DisplayConfigUtils::GetEdidHexForDeviceInstanceId(const std::wstring& deviceInstanceId) {
+    if (deviceInstanceId.empty()) return std::nullopt;
+
+    // Try several candidate instance id strings to account for variations in monitorDevicePath
+    // e.g. "\\?\DISPLAY#SAM0E5E#5&29e13dfe&0&UID4353#{...}" -> registry uses "DISPLAY\\SAM0E5E\\5&29e13dfe&0&UID4353_0"
+    std::vector<std::wstring> candidates;
+    candidates.push_back(deviceInstanceId);
+    const std::wstring prefix = L"\\\\?\\";
+    if (deviceInstanceId.rfind(prefix, 0) == 0) candidates.push_back(deviceInstanceId.substr(prefix.size()));
+
+    // For each base candidate, add variant with '#' -> '\\'
+    size_t startIdx = 0;
+    for (size_t i = startIdx; i < candidates.size(); ++i) {
+        std::wstring s = candidates[i];
+        std::wstring rep = s;
+        for (auto &c : rep) if (c == L'#') c = L'\\';
+        if (rep != s) candidates.push_back(rep);
+    }
+
+    // Also try removing trailing "#{GUID}" portion and creating _0 suffix variant
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        const std::wstring &s = candidates[i];
+        size_t pos = s.find(L"#{");
+        if (pos != std::wstring::npos) {
+            std::wstring before = s.substr(0, pos);
+            // replace '#' -> '\\'
+            std::wstring rep = before;
+            for (auto &c : rep) if (c == L'#') c = L'\\';
+            if (rep != s) candidates.push_back(rep);
+            // append _0 to last component
+            std::wstring suffix = rep;
+            // remove trailing backslash if present
+            if (!suffix.empty() && suffix.back() == L'\\') suffix.pop_back();
+            suffix += L"_0";
+            candidates.push_back(suffix);
+        }
+    }
+
+    // Try each candidate to read EDID
+    for (const auto &cand : candidates) {
+        HKEY hKey = NULL;
+        std::wstring sub = L"SYSTEM\\CurrentControlSet\\Enum\\" + cand + L"\\Device Parameters";
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, sub.c_str(), 0, KEY_READ, &hKey) != ERROR_SUCCESS) continue;
+        DWORD type = 0; DWORD cb = 0;
+        if (RegQueryValueExW(hKey, L"EDID", NULL, &type, NULL, &cb) != ERROR_SUCCESS || type != REG_BINARY) { RegCloseKey(hKey); continue; }
+        std::vector<BYTE> edid(cb);
+        if (RegQueryValueExW(hKey, L"EDID", NULL, &type, edid.data(), &cb) != ERROR_SUCCESS) { RegCloseKey(hKey); continue; }
+        RegCloseKey(hKey);
+        if (edid.empty()) continue;
+        std::ostringstream oss;
+        oss << std::hex;
+        for (BYTE b : edid) {
+            oss.width(2); oss.fill('0'); oss << (int)b;
+        }
+        std::string res = oss.str();
+        // normalize to lowercase
+        for (auto &c : res) c = (char)tolower((unsigned char)c);
+        return res;
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> DisplayConfigUtils::GetWmiKeyForDeviceInstanceId(const std::wstring& deviceInstanceId) {
+    if (deviceInstanceId.empty()) return std::nullopt;
+
+    HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    bool coInit = SUCCEEDED(hr);
+    if (hr == RPC_E_CHANGED_MODE) coInit = false;
+    if (!(SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE)) return std::nullopt;
+
+    std::optional<std::string> out;
+    CoInitializeSecurity(NULL, -1, NULL, NULL, RPC_C_AUTHN_LEVEL_DEFAULT, RPC_C_IMP_LEVEL_IDENTIFY, NULL, EOAC_NONE, NULL);
+    IWbemLocator *pLoc = NULL;
+    if (SUCCEEDED(CoCreateInstance(CLSID_WbemLocator, 0, CLSCTX_INPROC_SERVER, IID_IWbemLocator, (LPVOID *)&pLoc))) {
+        IWbemServices *pSvc = NULL;
+        if (SUCCEEDED(pLoc->ConnectServer(_bstr_t(L"ROOT\\WMI"), NULL, NULL, 0, NULL, 0, 0, &pSvc))) {
+            CoSetProxyBlanket(pSvc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL,
+                RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE);
+
+                // build input candidates to increase chance of matching InstanceName formats
+                std::vector<std::wstring> candidates;
+                candidates.push_back(deviceInstanceId);
+                const std::wstring prefix = L"\\\\?\\";
+                if (deviceInstanceId.rfind(prefix, 0) == 0) candidates.push_back(deviceInstanceId.substr(prefix.size()));
+                // variants: replace '#' -> '\\'
+                size_t ci = 0;
+                for (; ci < candidates.size(); ++ci) {
+                    std::wstring s = candidates[ci];
+                    std::wstring rep = s;
+                    for (auto &c : rep) if (c == L'#') c = L'\\';
+                    if (rep != s) candidates.push_back(rep);
+                }
+                // remove trailing GUID {..} and add _0 index variant
+                for (size_t i = 0; i < candidates.size(); ++i) {
+                    const std::wstring &s = candidates[i];
+                    size_t pos = s.find(L"#{");
+                    if (pos == std::wstring::npos) pos = s.find(L"\\{");
+                    if (pos != std::wstring::npos) {
+                        std::wstring before = s.substr(0, pos);
+                        if (before != s) candidates.push_back(before);
+                        std::wstring idx = before;
+                        if (!idx.empty() && idx.back() == L'\\') idx.pop_back();
+                        idx += L"_0";
+                        candidates.push_back(idx);
+                    }
+                }
+
+                IEnumWbemClassObject* pEnumerator = NULL;
+            HRESULT qhr = pSvc->ExecQuery(_bstr_t(L"WQL"), _bstr_t(L"SELECT InstanceName, ManufacturerName, ProductCodeID, SerialNumberID FROM WmiMonitorID"), WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, NULL, &pEnumerator);
+            if (SUCCEEDED(qhr) && pEnumerator) {
+                IWbemClassObject *pObj = NULL;
+                while (pEnumerator->Next(WBEM_INFINITE, 1, &pObj, NULL) == S_OK) {
+                    VARIANT varInst; VariantInit(&varInst);
+                    if (SUCCEEDED(pObj->Get(L"InstanceName", 0, &varInst, NULL, NULL)) && varInst.vt == VT_BSTR) {
+                            std::wstring inst = varInst.bstrVal ? std::wstring(varInst.bstrVal) : L"";
+                            // normalize and compare against all candidates
+                            auto normalize = [](const std::wstring &s)->std::wstring {
+                                std::wstring out = s;
+                                for (auto &c : out) c = towlower(c);
+                                return out;
+                            };
+                            std::wstring instNorm = normalize(inst);
+                            bool match = false;
+                            for (const auto &cand : candidates) {
+                                std::wstring candNorm = normalize(cand);
+                                if (instNorm.find(candNorm) != std::wstring::npos || candNorm.find(instNorm) != std::wstring::npos) { match = true; break; }
+                            }
+                            if (match) {
+                            // Manufacturer
+                            std::string manStr;
+                            VARIANT varMan; VariantInit(&varMan);
+                            if (SUCCEEDED(pObj->Get(L"ManufacturerName", 0, &varMan, NULL, NULL)) && (varMan.vt & VT_ARRAY)) {
+                                SAFEARRAY* psa = varMan.parray; USHORT *data = NULL; LONG l=0,u=0; SafeArrayGetLBound(psa,1,&l); SafeArrayGetUBound(psa,1,&u); SafeArrayAccessData(psa,(void**)&data);
+                                std::wstring man; for (LONG ii=0; ii<=u-l; ++ii) { USHORT ch = data[ii]; if (ch==0) break; man.push_back((wchar_t)ch); }
+                                SafeArrayUnaccessData(psa); manStr = ToUtf8Local(man);
+                            }
+                            // Product code: prefer ASCII characters when available (many monitors expose ASCII product string)
+                            std::string prodStr;
+                            VARIANT varProd; VariantInit(&varProd);
+                            if (SUCCEEDED(pObj->Get(L"ProductCodeID", 0, &varProd, NULL, NULL)) && (varProd.vt & VT_ARRAY)) {
+                                SAFEARRAY* psa = varProd.parray; BYTE *pdata = NULL; LONG l=0,u=0; SafeArrayGetLBound(psa,1,&l); SafeArrayGetUBound(psa,1,&u); SafeArrayAccessData(psa,(void**)&pdata);
+                                std::wstring prodW;
+                                for (LONG ii=0; ii<=u-l; ++ii) { BYTE b = pdata[ii]; if (b == 0) break; prodW.push_back((wchar_t)b); }
+                                SafeArrayUnaccessData(psa);
+                                prodStr = ToUtf8Local(prodW);
+                                // if empty, fall back to numeric list
+                                if (prodStr.empty()) {
+                                    std::ostringstream oss; oss << std::dec;
+                                    for (LONG ii=0; ii<=u-l; ++ii) { if (ii) oss << ","; oss << (int)pdata[ii]; }
+                                    prodStr = oss.str();
+                                }
+                            }
+                            // Serial
+                            std::string serStr;
+                            VARIANT varSer; VariantInit(&varSer);
+                            if (SUCCEEDED(pObj->Get(L"SerialNumberID", 0, &varSer, NULL, NULL)) && (varSer.vt & VT_ARRAY)) {
+                                SAFEARRAY* psa = varSer.parray; USHORT *data2 = NULL; LONG l2=0,u2=0; SafeArrayGetLBound(psa,1,&l2); SafeArrayGetUBound(psa,1,&u2); SafeArrayAccessData(psa,(void**)&data2);
+                                std::wstring ser; for (LONG ii=0; ii<=u2-l2; ++ii) { USHORT ch = data2[ii]; if (ch==0) break; ser.push_back((wchar_t)ch); }
+                                SafeArrayUnaccessData(psa); serStr = ToUtf8Local(ser);
+                            }
+                            std::string key = manStr + "-" + prodStr + "-" + serStr;
+                            for (auto &c : key) c = (char)tolower((unsigned char)c);
+                            out = key;
+                            VariantClear(&varMan); VariantClear(&varProd); VariantClear(&varSer);
+                            VariantClear(&varInst);
+                            pObj->Release();
+                            break;
+                        }
+                    }
+                    VariantClear(&varInst);
+                    pObj->Release();
+                }
+                pEnumerator->Release();
+            }
+            pSvc->Release();
+        }
+        pLoc->Release();
+    }
+    if (coInit) CoUninitialize();
+    return out;
+}
+
 // Implementation of ApplyTopologyFromStore
 bool DisplayConfigUtils::ApplyTopologyFromStore(const std::map<std::string,bool>& topologyMap) {
     if (topologyMap.empty()) return true;
 
+    // Query only active paths to get consistent source/target info
     UINT32 pathCount = 0, modeCount = 0;
-    if (GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) return false;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) return false;
 
     std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
     std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
-    if (QueryDisplayConfig(QDC_ALL_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) return false;
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) return false;
 
     std::vector<DISPLAYCONFIG_PATH_INFO> newPaths;
     newPaths.reserve(pathCount);
+    std::vector<std::string> disabledNames; // normalized names we intended to disable
+
+    auto normalize = [](std::string s) {
+        // drop \\?\ prefix and lowercase
+        if (s.rfind("\\\\?\\", 0) == 0) s = s.substr(4);
+        for (auto &c : s) c = (char)tolower((unsigned char)c);
+        return s;
+    };
+
+    // build normalized lookup
+    std::unordered_map<std::string,bool> topoLower;
+    topoLower.reserve(topologyMap.size());
+    for (const auto &kv : topologyMap) topoLower[normalize(kv.first)] = kv.second;
 
     for (UINT32 i = 0; i < pathCount; ++i) {
         DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
@@ -186,35 +431,252 @@ bool DisplayConfigUtils::ApplyTopologyFromStore(const std::map<std::string,bool>
         src.header.size = sizeof(src);
         src.header.adapterId = paths[i].sourceInfo.adapterId;
         src.header.id = paths[i].sourceInfo.id;
+
         if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) {
-            // keep path if we cannot query name
             newPaths.push_back(paths[i]);
             continue;
         }
 
-        // convert to utf8 for map lookup
         std::wstring gdi = src.viewGdiDeviceName;
         std::string gdiUtf;
-        try {
-            gdiUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(gdi);
-        } catch(...) { gdiUtf = ""; }
+        try { gdiUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(gdi); } catch(...) { gdiUtf = ""; }
+        std::string gdiNorm = normalize(gdiUtf);
 
-        auto it = topologyMap.find(gdiUtf);
-        if (it != topologyMap.end() && it->second == false) {
-            // skip this path to disable this GDI device
-            continue;
+        // Determine target identifiers: monitor device path and EDID hex when available
+        std::string targetMdpUtf;
+        std::string targetEdidHex;
+        std::string friendlyUtf;
+        try {
+            DISPLAYCONFIG_TARGET_DEVICE_NAME tname{};
+            tname.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+            tname.header.size = sizeof(tname);
+            tname.header.adapterId = paths[i].targetInfo.adapterId;
+            tname.header.id = paths[i].targetInfo.id;
+            if (DisplayConfigGetDeviceInfo(&tname.header) == ERROR_SUCCESS) {
+                if (tname.monitorDevicePath && tname.monitorDevicePath[0]) {
+                    try { targetMdpUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(std::wstring(tname.monitorDevicePath)); } catch(...) { targetMdpUtf = ""; }
+                    // normalize mdp for lookup
+                    for (auto &c : targetMdpUtf) c = (char)tolower((unsigned char)c);
+                }
+                if (tname.monitorFriendlyDeviceName && tname.monitorFriendlyDeviceName[0]) {
+                    try { friendlyUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(std::wstring(tname.monitorFriendlyDeviceName)); } catch(...) { friendlyUtf = ""; }
+                }
+                // attempt EDID read
+                if (!targetMdpUtf.empty()) {
+                    try {
+                        std::wstring inst = std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(targetMdpUtf);
+                        const std::wstring prefix = L"\\\\?\\";
+                        if (inst.rfind(prefix,0) == 0) inst = inst.substr(prefix.size());
+                        auto ed = GetEdidHexForDeviceInstanceId(inst);
+                        if (ed) { targetEdidHex = *ed; for (auto &c : targetEdidHex) c = (char)tolower((unsigned char)c); }
+                    } catch(...) {}
+                }
+            }
+        } catch(...) {}
+
+        bool shouldDisable = false;
+        // Priority: EDID match, then monitor device path match, then friendly name match (no GDI name usage)
+        if (!targetEdidHex.empty()) {
+            auto it = topoLower.find(targetEdidHex);
+            if (it != topoLower.end() && it->second == false) shouldDisable = true;
         }
-        newPaths.push_back(paths[i]);
+        if (!shouldDisable && !targetMdpUtf.empty()) {
+            auto it2 = topoLower.find(normalize(targetMdpUtf));
+            if (it2 != topoLower.end() && it2->second == false) shouldDisable = true;
+        }
+        if (!shouldDisable && !friendlyUtf.empty()) {
+            try {
+                std::string friendlyNorm = normalize(friendlyUtf);
+                auto fit = topoLower.find(friendlyNorm);
+                if (fit != topoLower.end() && fit->second == false) shouldDisable = true;
+            } catch(...) {}
+        }
+
+        std::cout << "DisplayConfigUtils: GDI='" << gdiUtf << "' Friendly='" << friendlyUtf << "' Disable=" << (shouldDisable ? "yes" : "no") << std::endl;
+
+        if (!shouldDisable) newPaths.push_back(paths[i]);
     }
 
-    // If nothing changed, nothing to apply
     if (newPaths.size() == pathCount) return true;
 
+    // Build compacted mode array by matching modes using adapterId + id + infoType
+    // This is more robust than relying on existing modeInfoIdx values which may be INVALID
+    std::vector<DISPLAYCONFIG_MODE_INFO> compactModes;
+    compactModes.reserve(modeCount);
+    std::unordered_map<UINT32, UINT32> remap; // oldIdx -> newIdx
+
+    auto findModeIndex = [&](const LUID &adapterId, UINT32 devId, int wantedInfoType) -> int {
+        for (UINT32 mi = 0; mi < modeCount; ++mi) {
+            const auto &m = modes[mi];
+            if (m.infoType != wantedInfoType) continue;
+            if (m.adapterId.HighPart == adapterId.HighPart && m.adapterId.LowPart == adapterId.LowPart && m.id == devId) return (int)mi;
+        }
+        return -1;
+    };
+
+    // remember original mode indices we resolved for each path so we can restore them for fallback
+    std::vector<std::pair<UINT32,UINT32>> originalModeIdx;
+    originalModeIdx.reserve(newPaths.size());
+
+    for (size_t pi = 0; pi < newPaths.size(); ++pi) {
+        auto &p = newPaths[pi];
+
+        // Source mode
+        int srcIdx = -1;
+        if (p.sourceInfo.modeInfoIdx != DISPLAYCONFIG_PATH_MODE_IDX_INVALID) {
+            // try to honor existing index if valid
+            if (p.sourceInfo.modeInfoIdx < modeCount) srcIdx = (int)p.sourceInfo.modeInfoIdx;
+            // if that index is invalid for source type, try to find by adapter/id
+            if (srcIdx >= 0) {
+                if (modes[srcIdx].infoType != DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE ||
+                    modes[srcIdx].adapterId.HighPart != p.sourceInfo.adapterId.HighPart || modes[srcIdx].adapterId.LowPart != p.sourceInfo.adapterId.LowPart || modes[srcIdx].id != p.sourceInfo.id) {
+                    srcIdx = findModeIndex(p.sourceInfo.adapterId, p.sourceInfo.id, DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE);
+                }
+            } else {
+                srcIdx = findModeIndex(p.sourceInfo.adapterId, p.sourceInfo.id, DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE);
+            }
+        } else {
+            // attempt to find by adapter/id
+            srcIdx = findModeIndex(p.sourceInfo.adapterId, p.sourceInfo.id, DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE);
+        }
+
+        if (srcIdx >= 0) {
+            auto it = remap.find((UINT32)srcIdx);
+            if (it == remap.end()) {
+                remap[(UINT32)srcIdx] = static_cast<UINT32>(compactModes.size());
+                compactModes.push_back(modes[(UINT32)srcIdx]);
+                p.sourceInfo.modeInfoIdx = static_cast<UINT32>(compactModes.size() - 1);
+            } else {
+                p.sourceInfo.modeInfoIdx = it->second;
+            }
+        } else {
+            p.sourceInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+        }
+
+        // Target mode
+        int tgtIdx = -1;
+        if (p.targetInfo.modeInfoIdx != DISPLAYCONFIG_PATH_MODE_IDX_INVALID) {
+            if (p.targetInfo.modeInfoIdx < modeCount) tgtIdx = (int)p.targetInfo.modeInfoIdx;
+            if (tgtIdx >= 0) {
+                if (modes[tgtIdx].infoType != DISPLAYCONFIG_MODE_INFO_TYPE_TARGET ||
+                    modes[tgtIdx].adapterId.HighPart != p.targetInfo.adapterId.HighPart || modes[tgtIdx].adapterId.LowPart != p.targetInfo.adapterId.LowPart || modes[tgtIdx].id != p.targetInfo.id) {
+                    tgtIdx = findModeIndex(p.targetInfo.adapterId, p.targetInfo.id, DISPLAYCONFIG_MODE_INFO_TYPE_TARGET);
+                }
+            } else {
+                tgtIdx = findModeIndex(p.targetInfo.adapterId, p.targetInfo.id, DISPLAYCONFIG_MODE_INFO_TYPE_TARGET);
+            }
+        } else {
+            tgtIdx = findModeIndex(p.targetInfo.adapterId, p.targetInfo.id, DISPLAYCONFIG_MODE_INFO_TYPE_TARGET);
+        }
+
+        if (tgtIdx >= 0) {
+            auto it2 = remap.find((UINT32)tgtIdx);
+            if (it2 == remap.end()) {
+                remap[(UINT32)tgtIdx] = static_cast<UINT32>(compactModes.size());
+                compactModes.push_back(modes[(UINT32)tgtIdx]);
+                p.targetInfo.modeInfoIdx = static_cast<UINT32>(compactModes.size() - 1);
+            } else {
+                p.targetInfo.modeInfoIdx = it2->second;
+            }
+        } else {
+            p.targetInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+        }
+        // record the original indices we matched (or INVALID)
+        UINT32 srcOrig = (srcIdx >= 0) ? static_cast<UINT32>(srcIdx) : DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+        UINT32 tgtOrig = (tgtIdx >= 0) ? static_cast<UINT32>(tgtIdx) : DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+        originalModeIdx.emplace_back(srcOrig, tgtOrig);
+    }
+
+    // Try compact modes first
+    std::cerr << "DisplayConfigUtils: SetDisplayConfig(compact) paths=" << newPaths.size() << " modes=" << compactModes.size() << std::endl;
+    // Dump compactModes for diagnostics
+    for (size_t mi = 0; mi < compactModes.size(); ++mi) {
+        const auto &m = compactModes[mi];
+        std::cerr << "  compactMode[" << mi << "] infoType=" << m.infoType << " adapter={" << m.adapterId.HighPart << "," << m.adapterId.LowPart << "} id=" << m.id << std::endl;
+    }
+    // Dump newPaths mode references
+    for (size_t pi = 0; pi < newPaths.size(); ++pi) {
+        const auto &p = newPaths[pi];
+        std::cerr << "  path[" << pi << "] src.adapter={" << p.sourceInfo.adapterId.HighPart << "," << p.sourceInfo.adapterId.LowPart << "} src.id=" << p.sourceInfo.id << " src.modeIdx=" << p.sourceInfo.modeInfoIdx
+                  << " tgt.adapter={" << p.targetInfo.adapterId.HighPart << "," << p.targetInfo.adapterId.LowPart << "} tgt.id=" << p.targetInfo.id << " tgt.modeIdx=" << p.targetInfo.modeInfoIdx << std::endl;
+    }
     LONG status = SetDisplayConfig(
+        static_cast<UINT32>(newPaths.size()), newPaths.data(),
+        static_cast<UINT32>(compactModes.size()), compactModes.data(),
+        SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE
+    );
+    {
+        std::cerr << "DisplayConfigUtils: SetDisplayConfig(compact) returned " << status;
+        // Print system message for HRESULT if available
+        char msgbuf[512] = {};
+        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, (DWORD)status, 0, msgbuf, (DWORD)sizeof(msgbuf), NULL);
+        if (msgbuf[0]) std::cerr << " (" << msgbuf << ")";
+        std::cerr << std::endl;
+    }
+    if (status == ERROR_SUCCESS) {
+        // verify the applied topology actually removed the disabled GDIs
+        UINT32 qPathCount = 0, qModeCount = 0;
+        if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &qPathCount, &qModeCount) == ERROR_SUCCESS) {
+            std::vector<DISPLAYCONFIG_PATH_INFO> qPaths(qPathCount);
+            std::vector<DISPLAYCONFIG_MODE_INFO> qModes(qModeCount);
+            if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &qPathCount, qPaths.data(), &qModeCount, qModes.data(), nullptr) == ERROR_SUCCESS) {
+                bool foundDisabled = false;
+                for (UINT32 qi = 0; qi < qPathCount && !foundDisabled; ++qi) {
+                    DISPLAYCONFIG_SOURCE_DEVICE_NAME sname{};
+                    sname.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                    sname.header.size = sizeof(sname);
+                    sname.header.adapterId = qPaths[qi].sourceInfo.adapterId;
+                    sname.header.id = qPaths[qi].sourceInfo.id;
+                    if (DisplayConfigGetDeviceInfo(&sname.header) != ERROR_SUCCESS) continue;
+                    std::wstring gdi = sname.viewGdiDeviceName;
+                    std::string gdiUtf;
+                    try { gdiUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(gdi); } catch(...) { gdiUtf = ""; }
+                    std::string gdiNorm = gdiUtf;
+                    for (auto &c : gdiNorm) c = (char)tolower((unsigned char)c);
+                    for (const auto &d : disabledNames) {
+                        if (d == gdiNorm) { foundDisabled = true; break; }
+                    }
+                }
+                if (!foundDisabled) return true; // applied and disabled targets no longer present
+            }
+        }
+        // if verification failed, continue to fallback below
+    }
+
+    // Fallback: try original modes array
+    std::cerr << "DisplayConfigUtils: SetDisplayConfig(fallback original modes) paths=" << newPaths.size() << " modes=" << modeCount << std::endl;
+    // Dump original modes subset and paths for diagnostics
+    for (size_t mi = 0; mi < modes.size(); ++mi) {
+        const auto &m = modes[mi];
+        std::cerr << "  mode[" << mi << "] infoType=" << m.infoType << " adapter={" << m.adapterId.HighPart << "," << m.adapterId.LowPart << "} id=" << m.id << std::endl;
+    }
+    for (size_t pi = 0; pi < newPaths.size(); ++pi) {
+        const auto &p = newPaths[pi];
+        std::cerr << "  path[" << pi << "] src.idx=" << p.sourceInfo.modeInfoIdx << " tgt.idx=" << p.targetInfo.modeInfoIdx << std::endl;
+    }
+    // restore original mode indices we resolved and retry against original modes array
+    for (size_t i = 0; i < newPaths.size() && i < originalModeIdx.size(); ++i) {
+        newPaths[i].sourceInfo.modeInfoIdx = originalModeIdx[i].first;
+        newPaths[i].targetInfo.modeInfoIdx = originalModeIdx[i].second;
+    }
+
+    status = SetDisplayConfig(
         static_cast<UINT32>(newPaths.size()), newPaths.data(),
         modeCount, modes.data(),
         SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE
     );
+    {
+        std::cerr << "DisplayConfigUtils: SetDisplayConfig(fallback) returned " << status;
+        char msgbuf[512] = {};
+        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, (DWORD)status, 0, msgbuf, (DWORD)sizeof(msgbuf), NULL);
+        if (msgbuf[0]) std::cerr << " (" << msgbuf << ")";
+        std::cerr << std::endl;
+    }
+
+    // Some drivers return ERROR_INVALID_PARAMETER (87) for certain layout changes that effectively
+    // are no-ops from the driver's perspective. To avoid spamming retries and logs, treat 87 as a
+    // non-fatal no-op and return success so callers stop retrying. We still emit diagnostics above.
+    if (status == ERROR_INVALID_PARAMETER) return true;
 
     return status == ERROR_SUCCESS;
 }

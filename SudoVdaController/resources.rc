@@ -1,0 +1,5 @@
+#include "resource.h"
+
+// Embed the PNG asset as raw resource so we can load it at runtime when an external file
+// isn't present next to the executable.
+IDR_SVC_PNG RCDATA "assets\\svc.png"

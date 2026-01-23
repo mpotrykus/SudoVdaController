@@ -2,6 +2,7 @@
 #include "TrayServer.h"
 #include "VirtualDisplayController.h"
 #include "../utils/GuidUtils.h"
+#include "../resource.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -17,10 +18,12 @@
 #include <unordered_map>
 #include <optional>
 #include <sddl.h>
+#include <gdiplus.h> // added
 #include <iostream>
 #include "../Utils/JsonUtils.h"
 #include "../utils/DisplayConfigUtils.h"
 #include "../utils/HdrUtils.h"
+#include "../utils/ConfigStore.h"
 
 using namespace vdc;
 
@@ -34,13 +37,14 @@ namespace {
     static std::atomic<bool> g_running{ false };
 
     enum class DisplayAction : int {
-        None =       0,
-        Details =    1,
-        Remove =     2,
-        Add =        3,
-        SetPrimary = 4,
-        ToggleHdr =  5,
-        Custom =     6
+        None =         0,
+        Details =      1,
+        Remove =       2,
+        ToggleEnable = 3,
+        Add =          4,
+        SetPrimary =   5,
+        ToggleHdr =    6,
+        Custom =       7
     };
 
     struct MenuItem {
@@ -345,6 +349,8 @@ namespace {
                     // Build menu from current displays
                     std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
                     auto list = ctx->controller->ListDisplays();
+                    // Count total displays (physical + virtual) so we can hide Enable/Disable when only one monitor exists
+                    int totalCount = static_cast<int>(list.size());
                     ctx->menuMap->clear();
                     UINT id = MENU_BASE_ID;
                     for (const auto& p : list) {
@@ -401,6 +407,40 @@ namespace {
                             AppendMenuW(hSub, MF_STRING, id, L"Remove");
                             ctx->menuMap->emplace(id, MenuItem{ p.first, DisplayAction::Remove });
                             ++id;
+                        } else {
+                            // For physical displays, add Enable/Disable toggle
+                            // Only show Enable/Disable when there is more than one monitor (physical or virtual)
+                            if (totalCount <= 1) {
+                                // don't show toggle when this is the only monitor
+                            } else {
+                                // Determine current state from persisted topology (default: enabled)
+                            bool enabled = true;
+                            try {
+                                vdc::ConfigStore cs;
+                                auto topo = cs.GetTopologyMap();
+                                // derive gdiUtf from label parsing
+                                size_t l = label.rfind(L'(');
+                                size_t r = label.rfind(L')');
+                                std::wstring gdiName;
+                                if (l != std::wstring::npos && r != std::wstring::npos && r > l) gdiName = label.substr(l+1, r-l-1);
+                                std::string gdiUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(gdiName);
+                                for (auto &c : gdiUtf) c = (char)tolower((unsigned char)c);
+                                auto f = topo.find(gdiUtf);
+                                if (f != topo.end()) enabled = f->second;
+                            } catch(...) {}
+                            const wchar_t* toggleLabel = enabled ? L"Disable" : L"Enable";
+                            AppendMenuW(hSub, MF_STRING, id, toggleLabel);
+                            MenuItem mit{}; mit.guid = p.first; mit.action = DisplayAction::ToggleEnable;
+                            // parse GDI name into physicalName for handler
+                            size_t l2 = label.rfind(L'(');
+                            size_t r2 = label.rfind(L')');
+                            if (l2 != std::wstring::npos && r2 != std::wstring::npos && r2 > l2) {
+                                mit.physicalName = label.substr(l2+1, r2-l2-1);
+                                mit.physicalLabel = label;
+                            }
+                            ctx->menuMap->emplace(id, mit);
+                            ++id;
+                            }
                         }
 
                         // Append popup submenu for this display with the label
@@ -472,7 +512,7 @@ namespace {
                         AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hRes, L"Add display");
                     }
                     // Clear Display Config option between Add display and Exit
-                    AppendMenuW(hMenu, MF_STRING, MENU_CLEAR_CONFIG_ID, L"Clear Display Config");
+                    AppendMenuW(hMenu, MF_STRING, MENU_CLEAR_CONFIG_ID, L"Clear display config");
 
                     AppendMenuW(hMenu, MF_STRING, MENU_EXIT_ID, L"Exit");
 
@@ -533,6 +573,29 @@ namespace {
 
                     MenuItem mi = it->second;
                     GUID toActOn = mi.guid;
+                    // Handle Enable/Disable for physical displays
+                    if (mi.action == DisplayAction::ToggleEnable && !mi.physicalName.empty()) {
+                        try {
+                            vdc::ConfigStore cs;
+                            // update per-mapping topology if possible
+                            cs.UpdateTopologyForGdi(mi.guid, mi.physicalName, false); // toggle will flip below
+                            // get combined topology and compute new state for this gdi
+                            auto combined = cs.GetCombinedTopology(cs.GetTopologyMergePolicyDisabledWins());
+                            std::string gdiUtf = std::wstring_convert<std::codecvt_utf8<wchar_t>>().to_bytes(mi.physicalName);
+                            for (auto &c : gdiUtf) c = (char)tolower((unsigned char)c);
+                            bool cur = true;
+                            auto itc = combined.find(gdiUtf);
+                            if (itc != combined.end()) cur = itc->second;
+                            // flip desired
+                            bool desired = !cur;
+                            // persist to mapping or global
+                            cs.UpdateTopologyForGdi(mi.guid, mi.physicalName, desired);
+                            // Apply immediately using merged topology
+                            auto toApply = cs.GetCombinedTopology(cs.GetTopologyMergePolicyDisabledWins());
+                            try { vdc::DisplayConfigUtils::ApplyTopologyFromStore(toApply); } catch(...) {}
+                        } catch(...) {}
+                        return 0;
+                    }
                     if (mi.action == DisplayAction::Details) {
                         if (!mi.physicalName.empty()) {
                             // Physical display: build details using DisplayConfigUtils + HdrUtils
@@ -659,6 +722,15 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
         return 1;
     }
 
+    // Initialize GDI+ so we can load a PNG and get an HICON
+    ULONG_PTR gdiplusToken = 0;
+    Gdiplus::GdiplusStartupInput gdiStartupInput;
+    if (Gdiplus::GdiplusStartup(&gdiplusToken, &gdiStartupInput, NULL) != Gdiplus::Ok) {
+        gdiplusToken = 0;
+    }
+
+    HICON customIcon = NULL;
+
     // Add tray icon
     NOTIFYICONDATAW nid{};
     nid.cbSize = sizeof(nid);
@@ -666,7 +738,71 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
     nid.uID = 1;
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     nid.uCallbackMessage = WM_TRAYICON;
-    nid.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+
+    // Attempt to load assets/svc.png next to the executable using GDI+
+    wchar_t exePath[MAX_PATH] = {0};
+    if (GetModuleFileNameW(NULL, exePath, ARRAYSIZE(exePath))) {
+        std::wstring exeDir = exePath;
+        size_t pos = exeDir.find_last_of(L"\\/");
+        if (pos != std::wstring::npos) exeDir.resize(pos);
+        // Try a few candidate asset names (prefer the new sdc.png, fall back to old svc.png)
+        std::vector<std::wstring> candidates = {
+            exeDir + L"\\assets\\sdc.png",
+            exeDir + L"\\assets\\svc.png",
+            exeDir + L"\\assets\\svc.bmp",
+            exeDir + L"\\assets\\sdc.ico"
+        };
+        HICON foundIcon = NULL;
+        for (const auto &iconPath : candidates) {
+            // Try GDI+ for raster images (.png/.bmp)
+            Gdiplus::Bitmap* bmp = Gdiplus::Bitmap::FromFile(iconPath.c_str());
+            if (bmp && bmp->GetLastStatus() == Gdiplus::Ok) {
+                HICON h = NULL;
+                if (bmp->GetHICON(&h) == Gdiplus::Ok && h != NULL) foundIcon = h;
+                delete bmp;
+                if (foundIcon) break;
+            } else {
+                if (bmp) delete bmp;
+                // Try LoadImage for .ico files (LoadImage supports ICO/BMP)
+                HICON hi = (HICON)LoadImageW(NULL, iconPath.c_str(), IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+                if (hi) { foundIcon = hi; break; }
+            }
+        }
+        if (foundIcon) {
+            customIcon = foundIcon;
+            nid.hIcon = foundIcon;
+        } else {
+            // If runtime assets not present, try to load embedded PNG resource and convert to HICON
+            HRSRC rsrc = FindResourceW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(IDR_SVC_PNG), RT_RCDATA);
+            if (rsrc) {
+                HGLOBAL rh = LoadResource(GetModuleHandleW(NULL), rsrc);
+                if (rh) {
+                    void* data = LockResource(rh);
+                    DWORD size = SizeofResource(GetModuleHandleW(NULL), rsrc);
+                    if (data && size > 0) {
+                        // Create stream from memory and load via Gdiplus::Bitmap
+                        IStream* stream = NULL;
+                        if (CreateStreamOnHGlobal(NULL, TRUE, &stream) == S_OK) {
+                            ULONG written = 0; stream->Write(data, size, &written);
+                            LARGE_INTEGER zero = {}; stream->Seek(zero, STREAM_SEEK_SET, NULL);
+                            Gdiplus::Bitmap* bmp = Gdiplus::Bitmap::FromStream(stream);
+                            if (bmp && bmp->GetLastStatus() == Gdiplus::Ok) {
+                                HICON h = NULL;
+                                if (bmp->GetHICON(&h) == Gdiplus::Ok && h != NULL) {
+                                    customIcon = h; nid.hIcon = h;
+                                }
+                                delete bmp;
+                            }
+                            stream->Release();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // fallback
+    if (nid.hIcon == NULL) nid.hIcon = LoadIconW(NULL, IDI_APPLICATION);
+
     wcscpy_s(nid.szTip, L"SudoVda Controller");
     Shell_NotifyIconW(NIM_ADD, &nid);
 
@@ -681,13 +817,13 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
     g_ctx.menuMap = &menuMap; // No-op reassignment for consistency
 
     // On startup, attempt to apply persisted topology to restore enabled/disabled state
-    try {
-        vdc::ConfigStore cs;
-        auto topo = cs.GetTopologyMap();
-        if (!topo.empty()) {
-            vdc::DisplayConfigUtils::ApplyTopologyFromStore(topo);
-        }
-    } catch(...) {}
+    //try {
+    //    vdc::ConfigStore cs;
+    //    auto topo = cs.GetTopologyMap();
+    //    if (!topo.empty()) {
+    //        vdc::DisplayConfigUtils::ApplyTopologyFromStore(topo);
+    //    }
+    //} catch(...) {}
 
     // Start pipe server thread
     constexpr wchar_t READY_EVENT_NAME[] = L"SudoVdaTray_ReadyEvent";
@@ -925,6 +1061,17 @@ int vdc::RunTrayServer(const std::wstring& pipeName) {
 
     // Cleanup tray icon
     Shell_NotifyIconW(NIM_DELETE, &nid);
+
+    // Destroy any custom icon we created
+    if (customIcon) {
+        DestroyIcon(customIcon);
+        customIcon = NULL;
+    }
+
+    // Shutdown GDI+ if it was started
+    if (gdiplusToken) {
+        Gdiplus::GdiplusShutdown(gdiplusToken);
+    }
 
     // Signal shutdown event to wake any ConnectNamedPipe overlapped waits.
     if (shutdownEvent) {

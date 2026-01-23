@@ -87,5 +87,16 @@
     </ClInclude>
     <ClInclude Include="pch.h" />
     <ClInclude Include="utils\ConfigStore.h" />
+    <ClInclude Include="resource.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="expl.txt" />
+    <Text Include="logs.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="assets\svc.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="resources.rc" />
   </ItemGroup>
 </Project>

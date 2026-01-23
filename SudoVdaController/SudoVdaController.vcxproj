@@ -31,6 +31,7 @@
     <ClCompile Include="controller\VirtualDisplaySession.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="resource.h" />
     <ClInclude Include="utils\ConfigStore.h" />
     <ClInclude Include="utils\DisplayConfigUtils.h" />
     <ClInclude Include="utils\GuidUtils.h" />
@@ -46,6 +47,16 @@
     <ClInclude Include="controller\VirtualDisplayController.h" />
     <ClInclude Include="controller\VirtualDisplaySession.h" />
     <ClInclude Include="models\VirtualDisplayTypes.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="expl.txt" />
+    <Text Include="logs.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="assets\svc.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="resources.rc" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
