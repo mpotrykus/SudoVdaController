@@ -35,6 +35,8 @@ public:
     // Topology persistence: mark whether a GDI device name is enabled (attached to desktop)
     void SetTopologyEntry(const std::wstring& gdiName, bool enabled);
     std::map<std::string,bool> GetTopologyMap() const;
+    // Clear all stored mappings and topology and persist
+    void Clear();
 
 private:
     std::map<std::string, std::vector<StoredMapping>> map_; // key is UTF8 name -> list of mappings

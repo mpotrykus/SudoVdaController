@@ -29,6 +29,7 @@ namespace {
     constexpr wchar_t WINDOW_CLASS_NAME[] = L"SudoVdaTrayWindowClass";
     constexpr UINT MENU_BASE_ID = 2000;
     constexpr UINT MENU_EXIT_ID = 1001;
+    constexpr UINT MENU_CLEAR_CONFIG_ID = 1999;
 
     static std::atomic<bool> g_running{ false };
 
@@ -470,6 +471,8 @@ namespace {
 
                         AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hRes, L"Add display");
                     }
+                    // Clear Display Config option between Add display and Exit
+                    AppendMenuW(hMenu, MF_STRING, MENU_CLEAR_CONFIG_ID, L"Clear Display Config");
 
                     AppendMenuW(hMenu, MF_STRING, MENU_EXIT_ID, L"Exit");
 
@@ -516,11 +519,20 @@ namespace {
 
             // per-display submenu selection
             if (ctx && ctx->menuMap) {
+                // First handle the Clear Config command specially
+                if (cmd == MENU_CLEAR_CONFIG_ID) {
+                    int resp = MessageBoxW(hWnd, L"Clear saved display configuration?", L"Clear Display Config", MB_OKCANCEL | MB_ICONWARNING);
+                    if (resp == IDOK) {
+                        try { vdc::ConfigStore cs; cs.Clear(); } catch(...) {}
+                    }
+                    return 0;
+                }
+
                 auto it = ctx->menuMap->find(cmd);
                 if (it != ctx->menuMap->end()) {
 
-					MenuItem mi = it->second;
-					GUID toActOn = mi.guid;
+                    MenuItem mi = it->second;
+                    GUID toActOn = mi.guid;
                     if (mi.action == DisplayAction::Details) {
                         if (!mi.physicalName.empty()) {
                             // Physical display: build details using DisplayConfigUtils + HdrUtils

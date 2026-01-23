@@ -17,6 +17,12 @@ static std::string ToUtf8(const std::wstring& w) {
     return out;
 }
 
+void ConfigStore::Clear() {
+    map_.clear();
+    topology_.clear();
+    Save();
+}
+
 std::optional<StoredMapping> ConfigStore::GetByNameAndMode(const std::wstring& name, int width, int height, int refresh) const {
     std::string k = ToUtf8(name);
     auto it = map_.find(k);
