@@ -4,8 +4,9 @@
 
 namespace vdc {
 
-    struct VirtualDisplayConfig {
-        std::wstring deviceName;
+    struct VirtualDisplay {
+        std::wstring deviceName = L"SudoMakerVDD";
+        std::wstring gdiName;
         int width = 1920;
         int height = 1080;
         int refreshRateMilliHz = 60000;

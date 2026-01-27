@@ -12,34 +12,39 @@ using Microsoft::WRL::ComPtr;
 
 // Helper: find adapter LUID and target id for a given GDI device name
 static bool findDisplayIds(const wchar_t* displayName, LUID& adapterId, uint32_t& targetId) {
-    UINT32 pathCount = 0, modeCount = 0;
-    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) {
-        return false;
-    }
-
-    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
-    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
-    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) {
-        return false;
-    }
-
-    for (UINT32 i = 0; i < pathCount; ++i) {
-        DISPLAYCONFIG_SOURCE_DEVICE_NAME sourceName = {};
-        sourceName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
-        sourceName.header.size = sizeof(sourceName);
-        sourceName.header.adapterId = paths[i].sourceInfo.adapterId;
-        sourceName.header.id = paths[i].sourceInfo.id;
-
-        if (DisplayConfigGetDeviceInfo(&sourceName.header) != ERROR_SUCCESS) {
+    // Try active paths first (fastest, common case)
+    for (int mode = 0; mode < 2; ++mode) {
+        const UINT32 flags = (mode == 0) ? QDC_ONLY_ACTIVE_PATHS : QDC_ALL_PATHS;
+        UINT32 pathCount = 0, modeCount = 0;
+        if (GetDisplayConfigBufferSizes(flags, &pathCount, &modeCount) != ERROR_SUCCESS) {
             continue;
         }
 
-        if (std::wstring_view(sourceName.viewGdiDeviceName) == std::wstring_view(displayName)) {
-            adapterId = paths[i].sourceInfo.adapterId;
-            targetId = paths[i].targetInfo.id;
-            return true;
+        std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+        std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+        if (QueryDisplayConfig(flags, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) {
+            continue;
+        }
+
+        for (UINT32 i = 0; i < pathCount; ++i) {
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME sourceName = {};
+            sourceName.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            sourceName.header.size = sizeof(sourceName);
+            sourceName.header.adapterId = paths[i].sourceInfo.adapterId;
+            sourceName.header.id = paths[i].sourceInfo.id;
+
+            if (DisplayConfigGetDeviceInfo(&sourceName.header) != ERROR_SUCCESS) {
+                continue;
+            }
+
+            if (std::wstring_view(sourceName.viewGdiDeviceName) == std::wstring_view(displayName)) {
+                adapterId = paths[i].sourceInfo.adapterId;
+                targetId = paths[i].targetInfo.id;
+                return true;
+            }
         }
     }
+
     return false;
 }
 

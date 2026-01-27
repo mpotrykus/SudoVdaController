@@ -27,23 +27,27 @@
     <ClCompile Include="utils\HdrUtils.cpp">
       <Filter>utils</Filter>
     </ClCompile>
-    <ClCompile Include="controller\VirtualDisplaySession.cpp">
-      <Filter>controller</Filter>
-    </ClCompile>
     <ClCompile Include="controller\VirtualDisplayController.cpp">
       <Filter>controller</Filter>
     </ClCompile>
-    <ClCompile Include="controller\VirtualDisplay.cpp">
+    <ClCompile Include="controller\VirtualDisplayService.cpp">
       <Filter>controller</Filter>
     </ClCompile>
-    <ClCompile Include="controller\VdaSession.cpp">
-      <Filter>controller</Filter>
-    </ClCompile>
-    <ClCompile Include="controller\TrayServer.cpp">
+    <ClCompile Include="client\TrayServer.cpp">
       <Filter>controller</Filter>
     </ClCompile>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="utils\ConfigStore.cpp" />
+    <ClCompile Include="controller\VirtualDisplayService_handle.cpp" />
+    <ClCompile Include="utils\Logger.cpp" />
+    <ClCompile Include="client\TrayClient.cpp" />
+    <ClCompile Include="handlers\VerbHandlers.cpp" />
+    <ClCompile Include="handlers\SunshineConfig.cpp" />
+    <ClCompile Include="client\TrayWindow.cpp" />
+    <ClCompile Include="client\TrayMenuBuilder.cpp" />
+    <ClCompile Include="client\TrayActions.cpp" />
+    <ClCompile Include="client\CustomCreateDialog.cpp" />
+    <ClCompile Include="client\PipeProtocol.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="utils\DisplayConfigUtils.h">
@@ -67,31 +71,34 @@
     <ClInclude Include="models\VirtualDisplayTypes.h">
       <Filter>models</Filter>
     </ClInclude>
-    <ClInclude Include="models\VirtualDisplayConfig.h">
+    <ClInclude Include="models\VirtualDisplay.h">
       <Filter>models</Filter>
-    </ClInclude>
-    <ClInclude Include="controller\VirtualDisplaySession.h">
-      <Filter>controller</Filter>
     </ClInclude>
     <ClInclude Include="controller\VirtualDisplayController.h">
       <Filter>controller</Filter>
     </ClInclude>
-    <ClInclude Include="controller\VirtualDisplay.h">
+    <ClInclude Include="controller\VirtualDisplayService.h">
       <Filter>controller</Filter>
     </ClInclude>
-    <ClInclude Include="controller\VdaSession.h">
-      <Filter>controller</Filter>
-    </ClInclude>
-    <ClInclude Include="controller\TrayServer.h">
+    <ClInclude Include="client\TrayServer.h">
       <Filter>controller</Filter>
     </ClInclude>
     <ClInclude Include="pch.h" />
     <ClInclude Include="utils\ConfigStore.h" />
     <ClInclude Include="resource.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="expl.txt" />
-    <Text Include="logs.txt" />
+    <ClInclude Include="models\DisplayConfig.h" />
+    <ClInclude Include="utils\JsonSerializers.h" />
+    <ClInclude Include="utils\StringUtils.h" />
+    <ClInclude Include="utils\ContainerUtils.h" />
+    <ClInclude Include="utils\Logger.h" />
+    <ClInclude Include="client\TrayClient.h" />
+    <ClInclude Include="handlers\VerbHandlers.h" />
+    <ClInclude Include="handlers\SunshineConfig.h" />
+    <ClInclude Include="client\TrayWindow.h" />
+    <ClInclude Include="client\TrayMenuBuilder.h" />
+    <ClInclude Include="client\TrayActions.h" />
+    <ClInclude Include="client\CustomCreateDialog.h" />
+    <ClInclude Include="client\PipeProtocol.h" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="assets\svc.png" />

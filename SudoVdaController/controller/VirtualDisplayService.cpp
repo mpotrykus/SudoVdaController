@@ -1,8 +1,7 @@
 #include "../pch.h"
-// include vendor headers using project-relative path used in other sources
 #include "../third_party/sudovda/sudovda-ioctl.h"
 #include "../third_party/sudovda/sudovda.h"
-#include "VirtualDisplay.h"
+#include "VirtualDisplayService.h"
 
 #include <atomic>
 #include <thread>
@@ -10,14 +9,12 @@
 #include <sstream>
 #include <iomanip>
 #include <objbase.h>
+#include "../utils/GuidUtils.h"
+#include "../utils/StringUtils.h"
 
 using namespace SUDOVDA;
 
-namespace VDISPLAY {
-	// {dff7fd29-5b75-41d1-9731-b32a17a17104}
-	// static const GUID DEFAULT_DISPLAY_GUID = { 0xdff7fd29, 0x5b75, 0x41d1, { 0x97, 0x31, 0xb3, 0x2a, 0x17, 0xa1, 0x71, 0x04 } };
-
-	HANDLE SUDOVDA_DRIVER_HANDLE = INVALID_HANDLE_VALUE;
+namespace vdc {
 
 	// START ISOLATED DISPLAY DECLARATIONS
 	struct positionwidthheight;
@@ -53,16 +50,32 @@ namespace VDISPLAY {
 
 	// END ISOLATED DISPLAY DECLARATIONS
 
-	LONG getDeviceSettings(const wchar_t* deviceName, DEVMODEW& devMode) {
+	VirtualDisplayService::VirtualDisplayService() {
+	}
+
+	VirtualDisplayService::~VirtualDisplayService() {
+		closeVDisplayDevice();
+	}
+
+	bool VirtualDisplayService::Open() {
+		// If the driver handle is already valid, consider it opened.
+		if (SUDOVDA_DRIVER_HANDLE != INVALID_HANDLE_VALUE) {
+			return true;
+		}
+		auto st = openVDisplayDevice();
+		return st == DRIVER_STATUS::OK;
+	}
+
+	LONG VirtualDisplayService::getDeviceSettings(const wchar_t* deviceName, DEVMODEW& devMode) {
 		devMode.dmSize = sizeof(DEVMODEW);
 		return EnumDisplaySettingsW(deviceName, ENUM_CURRENT_SETTINGS, &devMode);
 	}
 
-	LONG changeDisplaySettings2(const wchar_t* deviceName, int width, int height, int refresh_rate, bool bApplyIsolated) {
+	LONG VirtualDisplayService::changeDisplaySettings(const wchar_t* deviceName, int width, int height, int refresh_rate, bool bApplyIsolated) {
 		UINT32 pathCount = 0;
 		UINT32 modeCount = 0;
 		if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount)) {
-			wprintf(L"[SUDOVDA] Failed to query display configuration size.\n");
+			LOG_ERROR("Failed to query display configuration size.");
 			return ERROR_INVALID_PARAMETER;
 		}
 
@@ -72,7 +85,7 @@ namespace VDISPLAY {
 		struct positionwidthheight* pCurrentElement;
 
 		if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, pathArray.data(), &modeCount, modeArray.data(), nullptr) != ERROR_SUCCESS) {
-			wprintf(L"[SUDOVDA] Failed to query display configuration.\n");
+			LOG_ERROR("Failed to query display configuration.");
 			return ERROR_INVALID_PARAMETER;
 		}
 
@@ -112,7 +125,7 @@ namespace VDISPLAY {
 							) {
 							auto* sourceMode = &modeArray[j].sourceMode;
 
-							wprintf(L"[SUDOVDA] Current mode found: [%dx%dx%d]\n", sourceMode->width, sourceMode->height, targetInfo->refreshRate);
+							LOG_INFO("Current mode found : [% dx % dx % d]", sourceMode->width, sourceMode->height, targetInfo->refreshRate);
 
 							pCurrentElement = new (struct positionwidthheight);
 
@@ -183,10 +196,10 @@ namespace VDISPLAY {
 					| SDC_SAVE_TO_DATABASE
 				);
 				if (status != ERROR_SUCCESS) {
-					wprintf(L"[SUDOVDA] Failed to apply display settings.\n");
+					LOG_ERROR("Failed to apply display settings.");
 				}
 				else {
-					wprintf(L"[SUDOVDA] Display settings updated successfully.\n");
+					LOG_INFO("Display settings updated successfully.");
 				}
 			}
 			for (iIndex = 0; iIndex < displayArray.size(); iIndex += 1)
@@ -215,7 +228,7 @@ namespace VDISPLAY {
 			auto* targetInfo = &pathArray[i].targetInfo;
 
 			if (std::wstring_view(sourceName.viewGdiDeviceName) == std::wstring_view(deviceName)) {
-				wprintf(L"[SUDOVDA] Display found: %ls\n", deviceName);
+				LOG_INFO("Display found: %ls", deviceName);
 				for (UINT32 j = 0; j < modeCount; j++) {
 					if (
 						modeArray[j].infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE &&
@@ -225,7 +238,7 @@ namespace VDISPLAY {
 						) {
 						auto* sourceMode = &modeArray[j].sourceMode;
 
-						wprintf(L"[SUDOVDA] Current mode found: [%dx%dx%d]\n", sourceMode->width, sourceMode->height, targetInfo->refreshRate);
+						LOG_INFO("Current mode found: [%dx%dx%d]", sourceMode->width, sourceMode->height, targetInfo->refreshRate);
 
 						sourceMode->width = width;
 						sourceMode->height = height;
@@ -243,149 +256,26 @@ namespace VDISPLAY {
 							| SDC_SAVE_TO_DATABASE
 						);
 						if (status != ERROR_SUCCESS) {
-							wprintf(L"[SUDOVDA] Failed to apply display settings.\n");
+							LOG_ERROR("Failed to apply display settings.");
 						}
 						else {
-							wprintf(L"[SUDOVDA] Display settings updated successfully.\n");
+							LOG_INFO("Display settings updated successfully.");
 						}
 
 						return status;
 					}
 				}
 
-				wprintf(L"[SUDOVDA] Mode [%dx%dx%d] not found for display: %ls\n", width, height, refresh_rate, deviceName);
+				LOG_ERROR("Mode [%dx%dx%d] not found for display: %ls", width, height, refresh_rate, deviceName);
 				return ERROR_INVALID_PARAMETER;
 			}
 		}
 
-		wprintf(L"[SUDOVDA] Display not found: %ls\n", deviceName);
+		LOG_ERROR("Display not found: %ls", deviceName);
 		return ERROR_DEVICE_NOT_CONNECTED;
 	}
 
-	LONG changeDisplaySettings(const wchar_t* deviceName, int width, int height, int refresh_rate) {
-		DEVMODEW devMode = {};
-		devMode.dmSize = sizeof(devMode);
-
-		// Old method to set at least baseline refresh rate
-		if (EnumDisplaySettingsW(deviceName, ENUM_CURRENT_SETTINGS, &devMode)) {
-			DWORD targetRefreshRate = refresh_rate / 1000;
-			DWORD altRefreshRate = targetRefreshRate;
-
-			if (refresh_rate % 1000) {
-				if (refresh_rate % 1000 >= 900) {
-					targetRefreshRate += 1;
-				}
-				else {
-					altRefreshRate += 1;
-				}
-			}
-			else {
-				altRefreshRate -= 1;
-			}
-
-			wprintf(L"[SUDOVDA] Applying baseline display mode [%dx%dx%d] for %ls.\n", width, height, targetRefreshRate, deviceName);
-
-			devMode.dmPelsWidth = width;
-			devMode.dmPelsHeight = height;
-			devMode.dmDisplayFrequency = targetRefreshRate;
-			devMode.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
-
-			auto res = ChangeDisplaySettingsExW(deviceName, &devMode, NULL, CDS_UPDATEREGISTRY, NULL);
-
-			if (res != ERROR_SUCCESS) {
-				wprintf(L"[SUDOVDA] Failed to apply baseline display mode, trying alt mode: [%dx%dx%d].\n", width, height, altRefreshRate);
-				devMode.dmDisplayFrequency = altRefreshRate;
-				res = ChangeDisplaySettingsExW(deviceName, &devMode, NULL, CDS_UPDATEREGISTRY, NULL);
-				if (res != ERROR_SUCCESS) {
-					wprintf(L"[SUDOVDA] Failed to apply alt baseline display mode.\n");
-				}
-			}
-
-			if (res == ERROR_SUCCESS) {
-				wprintf(L"[SUDOVDA] Baseline display mode applied successfully.");
-			}
-		}
-
-		// Use new method to set refresh rate if fine tuned
-		return changeDisplaySettings2(deviceName, width, height, refresh_rate);
-	}
-
-
-	std::wstring getPrimaryDisplay() {
-		DISPLAY_DEVICEW displayDevice;
-		displayDevice.cb = sizeof(DISPLAY_DEVICE);
-
-		std::wstring primaryDeviceName;
-
-		int deviceIndex = 0;
-		while (EnumDisplayDevicesW(NULL, deviceIndex, &displayDevice, 0)) {
-			if (displayDevice.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) {
-				primaryDeviceName = displayDevice.DeviceName;
-				break;
-			}
-			deviceIndex++;
-		}
-
-		return primaryDeviceName;
-	}
-
-	bool setPrimaryDisplay(const wchar_t* primaryDeviceName) {
-		DEVMODEW primaryDevMode{};
-		if (!getDeviceSettings(primaryDeviceName, primaryDevMode)) {
-			return false;
-		};
-
-		int offset_x = primaryDevMode.dmPosition.x;
-		int offset_y = primaryDevMode.dmPosition.y;
-
-		LONG result;
-
-		DISPLAY_DEVICEW displayDevice;
-		displayDevice.cb = sizeof(DISPLAY_DEVICEA);
-		int device_index = 0;
-
-		while (EnumDisplayDevicesW(NULL, device_index, &displayDevice, 0)) {
-			device_index++;
-			if (!(displayDevice.StateFlags & DISPLAY_DEVICE_ACTIVE)) {
-				continue;
-			}
-
-			DEVMODEW devMode{};
-			if (getDeviceSettings(displayDevice.DeviceName, devMode)) {
-				devMode.dmPosition.x -= offset_x;
-				devMode.dmPosition.y -= offset_y;
-				devMode.dmFields = DM_POSITION;
-
-				result = ChangeDisplaySettingsExW(displayDevice.DeviceName, &devMode, NULL, CDS_UPDATEREGISTRY | CDS_NORESET, NULL);
-				if (result != DISP_CHANGE_SUCCESSFUL) {
-					wprintf(L"[SUDOVDA] Changing config for display %ls failed!\n\n", displayDevice.DeviceName);
-					return false;
-				}
-			}
-		}
-
-		// Update primary device's config to ensure it's primary
-		primaryDevMode.dmPosition.x = 0;
-		primaryDevMode.dmPosition.y = 0;
-		primaryDevMode.dmFields = DM_POSITION;
-		result = ChangeDisplaySettingsExW(primaryDeviceName, &primaryDevMode, NULL, CDS_UPDATEREGISTRY | CDS_NORESET | CDS_SET_PRIMARY, NULL);
-		if (result != DISP_CHANGE_SUCCESSFUL) {
-			wprintf(L"[SUDOVDA] Changing config for primary display %ls failed!\n\n", primaryDeviceName);
-			return false;
-		}
-
-		wprintf(L"[SUDOVDA] Applying primary display %ls ...\n\n", primaryDeviceName);
-
-		result = ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL);
-		if (result != DISP_CHANGE_SUCCESSFUL) {
-			wprintf(L"[SUDOVDA] Applying display coinfig failed!\n\n");
-			return false;
-		}
-
-		return true;
-	}
-
-	bool findDisplayIds(const wchar_t* displayName, LUID& adapterId, uint32_t& targetId) {
+	bool VirtualDisplayService::findDisplayIds(const wchar_t* displayName, LUID& adapterId, uint32_t& targetId) {
 		UINT32 pathCount;
 		UINT32 modeCount;
 		if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount)) {
@@ -424,137 +314,7 @@ namespace VDISPLAY {
 		return true;
 	}
 
-	bool getDisplayHDR(const LUID& adapterLuid, const wchar_t* displayName) {
-		Microsoft::WRL::ComPtr<IDXGIFactory1> dxgiFactory;
-		HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory));
-		if (FAILED(hr)) {
-			wprintf(L"[SUDOVDA] CreateDXGIFactory1 failed in getDisplayHDR! hr=0x%lx\n", hr);
-			return false;
-		}
-
-		for (UINT adapterIdx = 0; ; ++adapterIdx) {
-			Microsoft::WRL::ComPtr<IDXGIAdapter1> currentAdapter;
-			hr = dxgiFactory->EnumAdapters1(adapterIdx, currentAdapter.ReleaseAndGetAddressOf());
-
-			if (hr == DXGI_ERROR_NOT_FOUND) {
-				break; // No more adapters
-			}
-			if (FAILED(hr)) {
-				wprintf(L"[SUDOVDA] EnumAdapters1 failed for index %u in getDisplayHDR! hr=0x%lx\n", adapterIdx, hr);
-				break;
-			}
-
-			DXGI_ADAPTER_DESC1 adapterDesc;
-			hr = currentAdapter->GetDesc1(&adapterDesc);
-			if (FAILED(hr)) {
-				wprintf(L"[SUDOVDA] GetDesc1 (Adapter) failed for index %u in getDisplayHDR! hr=0x%lx\n", adapterIdx, hr);
-				continue;
-			}
-
-			if (adapterDesc.AdapterLuid.LowPart == adapterLuid.LowPart &&
-				adapterDesc.AdapterLuid.HighPart == adapterLuid.HighPart) {
-
-				std::wstring_view displayName_view{ displayName };
-
-				// Adapter found. Now iterate its outputs and match against targetGdiDeviceName.
-				for (UINT outputIdx = 0; ; ++outputIdx) {
-					Microsoft::WRL::ComPtr<IDXGIOutput> dxgiOutput;
-					hr = currentAdapter->EnumOutputs(outputIdx, dxgiOutput.ReleaseAndGetAddressOf());
-
-					if (hr == DXGI_ERROR_NOT_FOUND) {
-						wprintf(L"[SUDOVDA] No more DXGI outputs on matched adapter for GDI name %ls.\n", displayName);
-						break; // No more outputs on this adapter
-					}
-					if (FAILED(hr) || !dxgiOutput) {
-						continue; // Error, try next output
-					}
-
-					DXGI_OUTPUT_DESC dxgiOutputDesc;
-					hr = dxgiOutput->GetDesc(&dxgiOutputDesc);
-					if (FAILED(hr)) {
-						continue;
-					}
-
-					MONITORINFOEXW monitorInfoEx = {};
-					monitorInfoEx.cbSize = sizeof(MONITORINFOEXW);
-					if (GetMonitorInfoW(dxgiOutputDesc.Monitor, &monitorInfoEx)) {
-						if (displayName_view == monitorInfoEx.szDevice) {
-							// This is the correct output!
-							wprintf(L"[SUDOVDA] Matched DXGI output GDI name: %ls\n", monitorInfoEx.szDevice);
-							Microsoft::WRL::ComPtr<IDXGIOutput6> dxgiOutput6;
-							hr = dxgiOutput.As(&dxgiOutput6);
-
-							if (SUCCEEDED(hr) && dxgiOutput6) {
-								DXGI_OUTPUT_DESC1 outputDesc1;
-								hr = dxgiOutput6->GetDesc1(&outputDesc1);
-								if (SUCCEEDED(hr)) {
-									if (outputDesc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020) {
-										return true; // HDR Active
-									}
-								}
-								else {
-									wprintf(L"[SUDOVDA] GetDesc1 (Output) failed for %ls. hr=0x%lx\n", monitorInfoEx.szDevice, hr);
-								}
-							}
-							else {
-								wprintf(L"[SUDOVDA] QueryInterface for IDXGIOutput6 failed for %ls. hr=0x%lx. HDR check method not available or output not capable.\n", monitorInfoEx.szDevice, hr);
-							}
-							// Matched the output, checked HDR (it was false or error). This is the only output we care about for this adapter.
-							return false; // Return false as HDR not active or error for this specific display
-						}
-					}
-					else {
-						DWORD lastError = GetLastError();
-						wprintf(L"[SUDOVDA] GetMonitorInfoW failed for HMONITOR 0x%p from DXGI output %ls. Error: %lu\n", dxgiOutputDesc.Monitor, dxgiOutputDesc.DeviceName, lastError);
-					}
-				} // end output enumeration loop for the matched adapter
-
-				// If output loop completes, the targetGdiDeviceName was not found among this adapter's DXGI outputs.
-				wprintf(L"[SUDOVDA] Target GDI name %ls not found among DXGI outputs of the matched adapter.\n", displayName);
-				return false;
-			}
-		} // end adapter enumeration loop
-
-		// If adapter loop completes without finding the adapterLuidFromCaller
-		wprintf(L"[SUDOVDA] Target adapter LUID {%lx-%lx} not found via DXGI.\n", adapterLuid.HighPart, adapterLuid.LowPart);
-		return false;
-	}
-
-	bool setDisplayHDR(const LUID& adapterId, const uint32_t& targetId, bool enableAdvancedColor) {
-		DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE setHdrInfo = {};
-		setHdrInfo.header.type = DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE;
-		setHdrInfo.header.size = sizeof(setHdrInfo);
-		setHdrInfo.header.adapterId = adapterId;
-		setHdrInfo.header.id = targetId;
-		setHdrInfo.enableAdvancedColor = enableAdvancedColor;
-
-		return DisplayConfigSetDeviceInfo(&setHdrInfo.header) == ERROR_SUCCESS;
-	}
-
-	bool getDisplayHDRByName(const wchar_t* displayName) {
-		LUID adapterId;
-		uint32_t targetId;
-
-		if (!findDisplayIds(displayName, adapterId, targetId)) {
-			wprintf(L"[SUDOVDA] Failed to find display IDs for %ls!\n", displayName);
-			return false;
-		}
-
-		return getDisplayHDR(adapterId, displayName);
-	}
-
-	bool setDisplayHDRByName(const wchar_t* displayName, bool enableAdvancedColor) {
-		LUID adapterId;
-		uint32_t targetId;
-
-		if (!findDisplayIds(displayName, adapterId, targetId)) {
-			return false;
-		}
-
-		return setDisplayHDR(adapterId, targetId, enableAdvancedColor);
-	}
-
-	void closeVDisplayDevice() {
+	void VirtualDisplayService::closeVDisplayDevice() {
 		if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 			return;
 		}
@@ -564,13 +324,13 @@ namespace VDISPLAY {
 		SUDOVDA_DRIVER_HANDLE = INVALID_HANDLE_VALUE;
 	}
 
-	DRIVER_STATUS openVDisplayDevice() {
+	VirtualDisplayService::DRIVER_STATUS VirtualDisplayService::openVDisplayDevice() {
 		uint32_t retryInterval = 20;
 		while (true) {
 			SUDOVDA_DRIVER_HANDLE = OpenDevice(&SUVDA_INTERFACE_GUID);
 			if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 				if (retryInterval > 320) {
-					printf("[SUDOVDA] Open device failed!\n");
+					LOG_ERROR("Open device failed");
 					return DRIVER_STATUS::FAILED;
 				}
 				retryInterval *= 2;
@@ -582,7 +342,7 @@ namespace VDISPLAY {
 		}
 
 		if (!CheckProtocolCompatible(SUDOVDA_DRIVER_HANDLE)) {
-			printf("[SUDOVDA] SUDOVDA protocol not compatible with driver!\n");
+			LOG_ERROR("SUDOVDA protocol not compatible with driver");
 			closeVDisplayDevice();
 			return DRIVER_STATUS::VERSION_INCOMPATIBLE;
 		}
@@ -590,17 +350,17 @@ namespace VDISPLAY {
 		return DRIVER_STATUS::OK;
 	}
 
-	bool startPingThread(std::function<void()> failCb) {
+	bool VirtualDisplayService::startPingThread(std::function<void()> failCb) {
 		if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 			return false;
 		}
 
 		VIRTUAL_DISPLAY_GET_WATCHDOG_OUT watchdogOut;
 		if (GetWatchdogTimeout(SUDOVDA_DRIVER_HANDLE, watchdogOut)) {
-			printf("[SUDOVDA] Watchdog: Timeout %d, Countdown %d\n", watchdogOut.Timeout, watchdogOut.Countdown);
+			LOG_INFO("Watchdog: Timeout %d, Countdown %d", watchdogOut.Timeout, watchdogOut.Countdown);
 		}
 		else {
-			printf("[SUDOVDA] Watchdog fetch failed!\n");
+			LOG_ERROR("Watchdog fetch failed");
 			return false;
 		}
 
@@ -627,7 +387,7 @@ namespace VDISPLAY {
 		return true;
 	}
 
-	bool setRenderAdapterByName(const std::wstring& adapterName) {
+	bool VirtualDisplayService::setRenderAdapterByName(const std::wstring& adapterName) {
 		if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 			return false;
 		}
@@ -659,7 +419,7 @@ namespace VDISPLAY {
 		return false;
 	}
 
-	std::wstring createVirtualDisplay(
+	std::optional<std::wstring> VirtualDisplayService::createVirtualDisplay(
 		const char* s_client_uid,
 		const char* s_client_name,
 		uint32_t width,
@@ -667,15 +427,23 @@ namespace VDISPLAY {
 		float fps,
 		const GUID& guid
 	) {
+		if (!Open()) return std::nullopt;
+
+		auto client_uid = GuidToString(guid);
+		if (client_uid.empty()) {
+			LOG_WARN("Failed to stringify GUID");
+			return std::nullopt;
+		}
+
 		if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 			return std::wstring();
 		}
 
 		VIRTUAL_DISPLAY_ADD_OUT output;
-		UINT refresh_millihz = static_cast<UINT>(fps * 1000.0f + 0.5f);
+		UINT refresh_millihz = static_cast<UINT>(std::lroundf(fps));
 
 		if (!AddVirtualDisplay(SUDOVDA_DRIVER_HANDLE, width, height, refresh_millihz, guid, s_client_name, s_client_uid, output)) {
-			printf("[SUDOVDA] Failed to add virtual display.\n");
+			LOG_ERROR("Failed to add virtual display.");
 			return std::wstring();
 		}
 
@@ -684,27 +452,37 @@ namespace VDISPLAY {
 		while (!GetAddedDisplayName(output, deviceName)) {
 			Sleep(retryInterval);
 			if (retryInterval > 320) {
-				printf("[SUDOVDA] Cannot get name for newly added virtual display!\n");
+				LOG_WARN("Cannot get name for newly added virtual display");
 				return std::wstring();
 			}
 			retryInterval *= 2;
 		}
 
-		wprintf(L"[SUDOVDA] Virtual display added successfully: %ls\n", deviceName);
-		// Print the effective FPS as a floating point value reconstructed from
-		// millihertz for clarity.
-		printf("[SUDOVDA] Configuration: W: %d, H: %d, FPS: %.2f\n", width, height, static_cast<float>(refresh_millihz) / 1000.0);
+		LOG_INFO("Virtual display added successfully: %ls", deviceName);
+		LOG_INFO("Configuration: W: %d, H: %d, FPS: %.2f", width, height, static_cast<float>(refresh_millihz));
 
-		return std::wstring(deviceName);
+		auto dev = std::wstring(deviceName);
+		if (dev.empty()) {
+			LOG_ERROR("Failed to create a virtual display");
+			return std::nullopt;
+		}
+
+		startPingThread([dev]() {
+			LOG_ERROR("Watchdog detected driver failure for device: %s", dev.c_str());
+		});
+
+		return dev;
 	}
 
-	bool removeVirtualDisplay(const GUID& guid) {
+	bool VirtualDisplayService::removeVirtualDisplay(const GUID& guid) {
+		if (!Open()) return false;
+
 		if (SUDOVDA_DRIVER_HANDLE == INVALID_HANDLE_VALUE) {
 			return false;
 		}
 
 		if (RemoveVirtualDisplay(SUDOVDA_DRIVER_HANDLE, guid)) {
-			printf("[SUDOVDA] Virtual display removed successfully.\n");
+			LOG_INFO("Virtual display removed successfully.");
 			return true;
 		}
 		else {
@@ -714,7 +492,7 @@ namespace VDISPLAY {
 
 	// START ISOLATED DISPLAY METHODS
 	// Shows the coordinates/height/width for the displays in the vector structure
-	std::string printAllDisplays(std::vector< struct positionwidthheight*> displays) {
+	std::string VirtualDisplayService::printAllDisplays(std::vector< struct positionwidthheight*> displays) {
 		int iIndex;
 		std::string sOutput;
 
@@ -740,7 +518,7 @@ namespace VDISPLAY {
 	// second display which is assumed to be already connected
 	//
 	// It will return the move that the unknown display would need to perform
-	std::vector < struct coordinates > moveToBeConnected(std::vector < struct coordinates > unknown, std::vector< struct coordinates> connected) {
+	std::vector < struct coordinates > VirtualDisplayService::moveToBeConnected(std::vector < struct coordinates > unknown, std::vector< struct coordinates> connected) {
 		// Figure out if the boxes are connected
 		// Assume that there are 4 points
 		int iIndex, iIndex2;
@@ -926,7 +704,7 @@ namespace VDISPLAY {
 
 	// Main method to rearrange the displays to have one isolated display in the lower right and
 	// move the other displays as necessary especially if there are holes
-	std::vector< struct positionwidthheight*>rearrangeVirtualDisplayForLowerRight(std::vector< struct positionwidthheight*> displays) {
+	std::vector< struct positionwidthheight*> VirtualDisplayService::rearrangeVirtualDisplayForLowerRight(std::vector< struct positionwidthheight*> displays) {
 
 		// Make a temporary connected List based on the current Displays
 		// Here connected means that the displays are "touching" by either the
@@ -1191,7 +969,7 @@ namespace VDISPLAY {
 	// Example: matchDisplay(L"SudoMaker Virtual Display Adapter")
 	// Result: L"\\\\.\\Display2"
 
-	std::vector <std::wstring> matchDisplay(std::wstring sMatch) {
+	std::vector <std::wstring> VirtualDisplayService::matchDisplay(std::wstring sMatch) {
 		DISPLAY_DEVICEW displayDevice;
 		displayDevice.cb = sizeof(DISPLAY_DEVICE);
 

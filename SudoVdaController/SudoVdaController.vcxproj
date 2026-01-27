@@ -19,38 +19,53 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="client\CustomCreateDialog.cpp" />
+    <ClCompile Include="client\PipeProtocol.cpp" />
+    <ClCompile Include="client\TrayActions.cpp" />
+    <ClCompile Include="client\TrayMenuBuilder.cpp" />
+    <ClCompile Include="client\TrayWindow.cpp" />
+    <ClCompile Include="controller\VirtualDisplayService_handle.cpp" />
+    <ClCompile Include="handlers\SunshineConfig.cpp" />
+    <ClCompile Include="client\TrayClient.cpp" />
+    <ClCompile Include="handlers\VerbHandlers.cpp" />
     <ClCompile Include="utils\CliParser.h" />
     <ClCompile Include="utils\ConfigStore.cpp" />
     <ClCompile Include="utils\DisplayConfigUtils.cpp" />
     <ClCompile Include="utils\HdrUtils.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="controller\TrayServer.cpp" />
-    <ClCompile Include="controller\VdaSession.cpp" />
-    <ClCompile Include="controller\VirtualDisplay.cpp" />
+    <ClCompile Include="client\TrayServer.cpp" />
+    <ClCompile Include="controller\VirtualDisplayService.cpp" />
     <ClCompile Include="controller\VirtualDisplayController.cpp" />
-    <ClCompile Include="controller\VirtualDisplaySession.cpp" />
+    <ClCompile Include="utils\Logger.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="client\CustomCreateDialog.h" />
+    <ClInclude Include="client\PipeProtocol.h" />
+    <ClInclude Include="client\TrayActions.h" />
+    <ClInclude Include="client\TrayMenuBuilder.h" />
+    <ClInclude Include="client\TrayWindow.h" />
+    <ClInclude Include="handlers\SunshineConfig.h" />
+    <ClInclude Include="client\TrayClient.h" />
+    <ClInclude Include="handlers\VerbHandlers.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="models\DisplayConfig.h" />
     <ClInclude Include="utils\ConfigStore.h" />
+    <ClInclude Include="utils\ContainerUtils.h" />
     <ClInclude Include="utils\DisplayConfigUtils.h" />
     <ClInclude Include="utils\GuidUtils.h" />
     <ClInclude Include="utils\HdrUtils.h" />
+    <ClInclude Include="utils\JsonSerializers.h" />
     <ClInclude Include="utils\JsonUtils.h" />
     <ClInclude Include="pch.h" />
-    <ClInclude Include="controller\TrayServer.h" />
-    <ClInclude Include="controller\VdaSession.h" />
+    <ClInclude Include="client\TrayServer.h" />
     <ClInclude Include="third_party\sudovda\sudovda-ioctl.h" />
     <ClInclude Include="third_party\sudovda\sudovda.h" />
-    <ClInclude Include="controller\VirtualDisplay.h" />
-    <ClInclude Include="models\VirtualDisplayConfig.h" />
+    <ClInclude Include="controller\VirtualDisplayService.h" />
+    <ClInclude Include="models\VirtualDisplay.h" />
     <ClInclude Include="controller\VirtualDisplayController.h" />
-    <ClInclude Include="controller\VirtualDisplaySession.h" />
     <ClInclude Include="models\VirtualDisplayTypes.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="expl.txt" />
-    <Text Include="logs.txt" />
+    <ClInclude Include="utils\Logger.h" />
+    <ClInclude Include="utils\StringUtils.h" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="assets\svc.png" />
