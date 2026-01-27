@@ -1,9 +1,11 @@
 #pragma once
 #include <string>
 #include <map>
+#include <memory>
 #include <optional>
 #include <windows.h>
 #include "../models/VirtualDisplayTypes.h"
+#include "../models/VirtualDisplay.h"
 #include <vector>
 #include "../models/DisplayConfig.h"
 
@@ -29,7 +31,7 @@ namespace vdc {
         // format: manufacturer-productcode-serial (lowercase)
         static std::optional<std::string> GetWmiKeyForDeviceInstanceId(const std::wstring& deviceInstanceId);
 
-        std::vector<std::pair<GUID, std::wstring>> ListDisplays(std::vector<std::pair<GUID, std::wstring>> virtualDisplays) const;
+        std::vector<std::pair<GUID, std::wstring>> ListDisplays(const std::map<GUID, std::unique_ptr<VirtualDisplay>, std::less<GUID>>& virtualDisplays) const;
         std::vector<vdc::Topology> GetActiveDisplayTopology(const std::vector<std::pair<GUID,std::wstring>>& virtualDisplays);
     };
 

@@ -15,6 +15,7 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include "../utils/StringUtils.h"
 
 namespace vdc {
 
@@ -23,17 +24,6 @@ namespace vdc {
         constexpr UINT MENU_EXIT_ID = 1001;
         constexpr UINT MENU_CLEAR_CONFIG_ID = 1999;
 
-        // Convert UTF‑8 → wide
-        static std::wstring Utf8ToWide(const std::string& s) {
-            try {
-                return std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(s);
-            }
-            catch (...) {
-                return std::wstring(s.begin(), s.end());
-            }
-        }
-
-        // Launch CLI create command (same exe)
         static void LaunchCliCreate(const VirtualDisplay& cfg, HWND hwnd) {
             wchar_t exePath[MAX_PATH];
             if (!GetModuleFileNameW(NULL, exePath, ARRAYSIZE(exePath))) {
@@ -113,7 +103,7 @@ namespace vdc {
             CloseHandle(pi.hProcess);
             CloseHandle(hRead);
 
-            std::wstring wout = Utf8ToWide(output);
+            std::wstring wout = StringToWString(output);
 
             if (exitCode != 0) {
                 std::wstring msg = L"Create command failed";
@@ -124,7 +114,6 @@ namespace vdc {
             }
         }
 
-        // Show details for a physical display
         static void ShowPhysicalDetails(HWND hwnd, const MenuItem& mi) {
             std::wstring title = mi.physicalLabel;
             std::wstring body;
@@ -146,11 +135,8 @@ namespace vdc {
             MessageBoxW(hwnd, body.c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
         }
 
-    } // anonymous namespace
+    }
 
-    // -----------------------------------------------------------------------------
-    // HandleTrayCommand
-    // -----------------------------------------------------------------------------
     void HandleTrayCommand(HWND hWnd, UINT cmd, TrayContext* ctx) {
         if (!ctx || !ctx->controller || !ctx->controllerMutex || !ctx->menuMap)
             return;
@@ -250,4 +236,4 @@ namespace vdc {
         }
     }
 
-} // namespace vdc
+} 

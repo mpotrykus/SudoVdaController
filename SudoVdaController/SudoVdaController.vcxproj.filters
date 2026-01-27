@@ -41,13 +41,17 @@
     <ClCompile Include="controller\VirtualDisplayService_handle.cpp" />
     <ClCompile Include="utils\Logger.cpp" />
     <ClCompile Include="client\TrayClient.cpp" />
-    <ClCompile Include="handlers\VerbHandlers.cpp" />
-    <ClCompile Include="handlers\SunshineConfig.cpp" />
+    <ClCompile Include="app\VerbHandlers.cpp" />
+    <ClCompile Include="app\SunshineConfig.cpp" />
     <ClCompile Include="client\TrayWindow.cpp" />
     <ClCompile Include="client\TrayMenuBuilder.cpp" />
     <ClCompile Include="client\TrayActions.cpp" />
     <ClCompile Include="client\CustomCreateDialog.cpp" />
     <ClCompile Include="client\PipeProtocol.cpp" />
+    <ClCompile Include="controller\driver\SudoVdaDriver.cpp" />
+    <ClCompile Include="controller\displayconfig\DisplayGeometry.cpp" />
+    <ClCompile Include="controller\displayconfig\DisplayLayout.cpp" />
+    <ClCompile Include="controller\displayconfig\DisplayTopology.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="utils\DisplayConfigUtils.h">
@@ -92,16 +96,20 @@
     <ClInclude Include="utils\ContainerUtils.h" />
     <ClInclude Include="utils\Logger.h" />
     <ClInclude Include="client\TrayClient.h" />
-    <ClInclude Include="handlers\VerbHandlers.h" />
-    <ClInclude Include="handlers\SunshineConfig.h" />
+    <ClInclude Include="app\VerbHandlers.h" />
+    <ClInclude Include="app\SunshineConfig.h" />
     <ClInclude Include="client\TrayWindow.h" />
     <ClInclude Include="client\TrayMenuBuilder.h" />
     <ClInclude Include="client\TrayActions.h" />
     <ClInclude Include="client\CustomCreateDialog.h" />
     <ClInclude Include="client\PipeProtocol.h" />
+    <ClInclude Include="controller\driver\SudoVdaDriver.h" />
+    <ClInclude Include="controller\displayconfig\DisplayGeometry.h" />
+    <ClInclude Include="controller\displayconfig\DisplayLayout.h" />
+    <ClInclude Include="controller\displayconfig\DisplayTopology.h" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="assets\svc.png" />
+    <Image Include="assets\svc.ico" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources.rc" />

@@ -56,6 +56,7 @@ using namespace vdisplay;
 #include <set>
 #include "../models/DisplayConfig.h"
 #include "Logger.h"
+#include "../models/VirtualDisplay.h"
 
 // Implementation of ApplyTopologyFromStore is placed after helper functions to avoid mixing
 // inside the middle of GetMonitorFriendlyNameFromDeviceInstanceId implementation.
@@ -985,13 +986,13 @@ bool DisplayConfigUtils::MakeDevicePrimary(const std::wstring& deviceName)
     return true;
 }
 
-std::vector<std::pair<GUID, std::wstring>> DisplayConfigUtils::ListDisplays(std::vector<std::pair<GUID, std::wstring>> virtualDisplays) const {
+std::vector<std::pair<GUID, std::wstring>> DisplayConfigUtils::ListDisplays(const std::map<GUID, std::unique_ptr<VirtualDisplay>, std::less<GUID>>& virtualDisplays) const {
     std::vector<std::pair<GUID, std::wstring>> out;
     out.reserve(virtualDisplays.size());
     // First enumerate physical displays and add them (marked with empty GUID)
     std::set<std::wstring> virtualGdiNames;
     for (const auto& kv : virtualDisplays) {
-        virtualGdiNames.insert(kv.second);
+        virtualGdiNames.insert(kv.second->gdiName);
     }
 
     // Enumerate adapters and their monitors to get monitor-friendly names (DeviceString on monitor devices)
@@ -1050,10 +1051,7 @@ std::vector<std::pair<GUID, std::wstring>> DisplayConfigUtils::ListDisplays(std:
         adapter.cb = sizeof(adapter);
     }
     for (const auto& kv : virtualDisplays) {
-        const std::wstring devName = kv.second;
-        std::wstring label;
-        if (!kv.second.empty()) label = kv.second + L" (" + devName + L")";
-        else label = devName;
+        std::wstring label = kv.second->deviceName + L" (" + kv.second->gdiName + L")";
         out.emplace_back(kv.first, label);
     }
     return out;

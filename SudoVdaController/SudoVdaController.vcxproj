@@ -24,10 +24,14 @@
     <ClCompile Include="client\TrayActions.cpp" />
     <ClCompile Include="client\TrayMenuBuilder.cpp" />
     <ClCompile Include="client\TrayWindow.cpp" />
+    <ClCompile Include="controller\displayconfig\DisplayGeometry.cpp" />
+    <ClCompile Include="controller\displayconfig\DisplayLayout.cpp" />
+    <ClCompile Include="controller\displayconfig\DisplayTopology.cpp" />
+    <ClCompile Include="controller\driver\SudoVdaDriver.cpp" />
     <ClCompile Include="controller\VirtualDisplayService_handle.cpp" />
-    <ClCompile Include="handlers\SunshineConfig.cpp" />
+    <ClCompile Include="app\SunshineConfig.cpp" />
     <ClCompile Include="client\TrayClient.cpp" />
-    <ClCompile Include="handlers\VerbHandlers.cpp" />
+    <ClCompile Include="app\VerbHandlers.cpp" />
     <ClCompile Include="utils\CliParser.h" />
     <ClCompile Include="utils\ConfigStore.cpp" />
     <ClCompile Include="utils\DisplayConfigUtils.cpp" />
@@ -44,9 +48,13 @@
     <ClInclude Include="client\TrayActions.h" />
     <ClInclude Include="client\TrayMenuBuilder.h" />
     <ClInclude Include="client\TrayWindow.h" />
-    <ClInclude Include="handlers\SunshineConfig.h" />
+    <ClInclude Include="app\SunshineConfig.h" />
     <ClInclude Include="client\TrayClient.h" />
-    <ClInclude Include="handlers\VerbHandlers.h" />
+    <ClInclude Include="app\VerbHandlers.h" />
+    <ClInclude Include="controller\displayconfig\DisplayGeometry.h" />
+    <ClInclude Include="controller\displayconfig\DisplayLayout.h" />
+    <ClInclude Include="controller\displayconfig\DisplayTopology.h" />
+    <ClInclude Include="controller\driver\SudoVdaDriver.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="models\DisplayConfig.h" />
     <ClInclude Include="utils\ConfigStore.h" />
@@ -68,7 +76,7 @@
     <ClInclude Include="utils\StringUtils.h" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="assets\svc.png" />
+    <Image Include="assets\svc.ico" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources.rc" />

@@ -4,6 +4,7 @@
 #include "../utils/Logger.h"
 #include "TrayMenuBuilder.h"
 #include "TrayActions.h"
+#include "../resource.h"
 
 #include <shellapi.h>
 
@@ -81,13 +82,24 @@ namespace vdc {
             nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
             nid.uCallbackMessage = WM_TRAYICON;
 
-            // Load your icon resource here
-            nid.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(101));
+            HICON hIcon = nullptr;
+            bool ownedIcon = false;
+            HINSTANCE hInst = GetModuleHandleW(nullptr);
+
+            hIcon = LoadIconW(hInst, MAKEINTRESOURCEW(IDI_MAINICON));
+
+            nid.hIcon = hIcon;
             wcscpy_s(nid.szTip, L"SudoVDA Controller");
 
             if (!Shell_NotifyIconW(NIM_ADD, &nid)) {
                 LOG_ERROR("Failed to add tray icon.");
+                if (ownedIcon && hIcon) DestroyIcon(hIcon);
                 return false;
+            }
+
+            // The shell makes its own copy of the icon. Destroy our owned icon handle if we created it.
+            if (ownedIcon && hIcon) {
+                DestroyIcon(hIcon);
             }
 
             return true;

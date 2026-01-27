@@ -1,59 +1,56 @@
 #pragma once
-#include <windows.h>
+
 #include <string>
-#include <functional>
-#include <vector>
-
-#ifndef FILE_DEVICE_UNKNOWN
-#define FILE_DEVICE_UNKNOWN 0x00000022
-#endif
-
-#include "../third_party/sudovda/sudovda.h"
 #include <optional>
+#include <windows.h>
+#include <guiddef.h>
 
 namespace vdc {
 
-    extern HANDLE SUDOVDA_DRIVER_HANDLE;
-	
-	class VirtualDisplayService {
-	public:
-		VirtualDisplayService();
-		~VirtualDisplayService();
-		
-		enum class DRIVER_STATUS {
-			UNKNOWN = 1,
-			OK = 0,
-			FAILED = -1,
-			VERSION_INCOMPATIBLE = -2,
-			WATCHDOG_FAILED = -3
-		};
+    class SudovdaDriver;
 
+    // High-level orchestrator for virtual display operations.
+    // Delegates:
+    //   - driver I/O to SudovdaDriver
+    //   - topology queries to DisplayTopology
+    //   - layout computation to DisplayLayout
+    class VirtualDisplayService {
+    public:
+        VirtualDisplayService();
+        ~VirtualDisplayService();
 
-		bool Open();
+        // Create a virtual display and return its GDI device name.
+        std::optional<std::wstring> CreateVirtualDisplay(
+            const char* clientUid,
+            const char* clientName,
+            uint32_t width,
+            uint32_t height,
+            float fps,
+            const GUID& guid
+        );
 
-		std::optional<std::wstring> createVirtualDisplay(
-			const char* s_client_uid,
-			const char* s_client_name,
-			uint32_t width,
-			uint32_t height,
-			float fps,
-			const GUID& guid
-		);
-		bool removeVirtualDisplay(const GUID& guid);
+        // Remove a virtual display by GUID.
+        bool RemoveVirtualDisplay(const GUID& guid);
 
-		LONG getDeviceSettings(const wchar_t* deviceName, DEVMODEW& devMode);
-		LONG changeDisplaySettings(const wchar_t* deviceName, int width, int height, int refresh_rate, bool bApplyIsolated = false);
-		bool findDisplayIds(const wchar_t* displayName, LUID& adapterId, uint32_t& targetId);
+        // Change mode (width/height/refresh) for a display by GDI name.
+        // If isolatedMode = true, applies the isolated layout algorithm.
+        bool ChangeDisplaySettings(
+            const std::wstring& gdiName,
+            int width,
+            int height,
+            int refreshMilliHz,
+            bool isolatedMode
+        );
 
-		DRIVER_STATUS openVDisplayDevice();
-		void closeVDisplayDevice();
+        // Find adapter + target IDs for a GDI device name.
+        bool FindDisplayIds(
+            const std::wstring& gdiName,
+            LUID& adapterId,
+            uint32_t& targetId
+        );
 
-		bool startPingThread(std::function<void()> failCb);
-		bool setRenderAdapterByName(const std::wstring& adapterName);
-		std::vector<std::wstring> matchDisplay(std::wstring sMatch);
+    private:
+        SudovdaDriver* m_driver; // owned
+    };
 
-		std::string printAllDisplays(std::vector< struct positionwidthheight*> displays);
-		std::vector < struct coordinates > moveToBeConnected(std::vector < struct coordinates > unknown, std::vector< struct coordinates> connected);
-		std::vector< struct positionwidthheight*> rearrangeVirtualDisplayForLowerRight(std::vector< struct positionwidthheight*> displays);
-	};
-}
+} // namespace vdc

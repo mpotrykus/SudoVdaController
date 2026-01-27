@@ -20,7 +20,6 @@ using namespace vdisplay;
 
 VirtualDisplayController::VirtualDisplayController() {
     virtualDisplayService_ = std::make_unique<VirtualDisplayService>();
-    virtualDisplayService_->Open();
     configStore_ = std::make_unique<ConfigStore>();
 }
 
@@ -34,7 +33,7 @@ bool VirtualDisplayController::CreateDisplay(const VirtualDisplay& cfg, const st
 	    GUID displayId = StringToGuid(displayConfig.displayId).value();
         float fpsHz = static_cast<float>(virtualDisplay.refreshRateMilliHz) / 1000.0f;
 
-        auto gdiName = virtualDisplayService_->createVirtualDisplay(GuidToString(displayId).c_str(), WStringToString(virtualDisplay.deviceName).c_str(),
+        auto gdiName = virtualDisplayService_->CreateVirtualDisplay(GuidToString(displayId).c_str(), WStringToString(virtualDisplay.deviceName).c_str(),
                                                                     virtualDisplay.width, virtualDisplay.height, fpsHz, displayId);
 
         if (!gdiName) {
@@ -45,8 +44,6 @@ bool VirtualDisplayController::CreateDisplay(const VirtualDisplay& cfg, const st
         virtualDisplay.gdiName = *gdiName;
         auto session = std::make_unique<VirtualDisplay>(virtualDisplay);
         virtualDisplays_.emplace(displayId, std::move(session));
-
-        
 
         if (cfg.hdr) {
             std::string devNameCopy = WStringToString(virtualDisplay.deviceName);
@@ -120,7 +117,7 @@ bool VirtualDisplayController::RemoveDisplay(const GUID& guid) {
             }
         }
 
-        if (!virtualDisplayService_->removeVirtualDisplay(guid)) {
+        if (!virtualDisplayService_->RemoveVirtualDisplay(guid)) {
             throw std::exception("Driver failed to remove display");
         }
 
@@ -229,16 +226,8 @@ size_t VirtualDisplayController::CountDisplays() const {
 }
 
 std::vector<std::pair<GUID, std::wstring>> VirtualDisplayController::ListDisplays() const {
-    std::vector<std::pair<GUID, std::wstring>> virtualDisplays;
-    virtualDisplays.reserve(virtualDisplays_.size());
-
-    for (const auto& virtualDisplay : virtualDisplays_)
-    {
-		virtualDisplays.push_back({ virtualDisplay.first, virtualDisplay.second->deviceName });
-    }
-
     DisplayConfigUtils utils;
-    return utils.ListDisplays(virtualDisplays);
+    return utils.ListDisplays(virtualDisplays_);
 }
 
 bool VirtualDisplayController::AddNewDisplayToConfigStore(GUID displayId,
@@ -259,19 +248,17 @@ bool VirtualDisplayController::AddNewDisplayToConfigStore(GUID displayId,
     auto toApply = configStore_->GetCombinedTopology(&displayConfig,
                                                      configStore_->GetTopologyMergePolicyDisabledWins());
     if (!toApply.empty()) {
-        std::string merged;
-        merged.reserve(256);
+
+        LOG_INFO("Applying merged topology:");
+
         for (const auto& t : toApply) {
-            if (!merged.empty()) merged += ' ';
-            merged += t.displayName + ":" + (t.enabled ? "1" : "0");
+            std::string message = "  (" + std::string(t.enabled ? "+" : " ") + ") " + t.displayName;
+            LOG_INFO(message.c_str());
 
             if (!t.edid.empty()) topologyMap.insert_or_assign(t.edid, t.enabled);
             if (!t.displayId.empty()) topologyMap.insert_or_assign(t.displayId, t.enabled);
             if (!t.displayName.empty()) topologyMap.insert_or_assign(t.displayName, t.enabled);
         }
-
-        std::string message = "Applying merged topology: " + merged;
-        LOG_INFO(message.c_str());
 
         if (!vdc::DisplayConfigUtils::ApplyTopologyFromStore(topologyMap)) {
             LOG_ERROR("Failed to apply merged topology from config store");

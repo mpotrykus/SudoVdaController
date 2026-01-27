@@ -9,6 +9,7 @@
 #include <locale>
 #include <string>
 #include <vector>
+#include "../utils/StringUtils.h"
 
 namespace vdc {
 
@@ -18,17 +19,6 @@ namespace vdc {
         constexpr UINT MENU_EXIT_ID = 1001;
         constexpr UINT MENU_CLEAR_CONFIG_ID = 1999;
 
-        // Helper: convert UTF‑8 → wide
-        static std::wstring Utf8ToWide(const std::string& s) {
-            try {
-                return std::wstring_convert<std::codecvt_utf8<wchar_t>>().from_bytes(s);
-            }
-            catch (...) {
-                return std::wstring(s.begin(), s.end());
-            }
-        }
-
-        // Helper: extract GDI name from “Foo Bar (DISPLAY1)”
         static std::wstring ExtractGdiName(const std::wstring& label) {
             size_t l = label.rfind(L'(');
             size_t r = label.rfind(L')');
@@ -151,16 +141,16 @@ namespace vdc {
                 HMENU hRateMenu = CreatePopupMenu();
                 if (!hRateMenu) continue;
 
-                std::wstring wRes = Utf8ToWide(res);
+                std::wstring wRes = StringToWString(res);
 
                 for (const auto& rate : refreshRates) {
                     HMENU hCsMenu = CreatePopupMenu();
                     if (!hCsMenu) continue;
 
-                    std::wstring wRate = Utf8ToWide(rate);
+                    std::wstring wRate = StringToWString(rate);
 
                     for (const auto& cs : colorSpace) {
-                        std::wstring wCs = Utf8ToWide(cs);
+                        std::wstring wCs = StringToWString(cs);
 
                         AppendMenuW(hCsMenu, MF_STRING, id, wCs.c_str());
 
