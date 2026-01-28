@@ -226,6 +226,14 @@ namespace vdc {
             break;
         }
 
+        case DisplayAction::ToggleEnable: {
+            if (!mi.gdiName.empty()) {
+                bool enabled = ctx->service->IsDisplayEnabled(mi.gdiName);
+                ctx->service->SetDisplayEnabled(mi.gdiName, !enabled);
+            }
+            break;
+        }
+
         case DisplayAction::Details: {
             if (!mi.gdiName.empty())
                 ShowPhysicalDetails(hWnd, mi);

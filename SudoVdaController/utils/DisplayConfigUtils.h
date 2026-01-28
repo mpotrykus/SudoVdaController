@@ -22,6 +22,10 @@ namespace vdc {
         static std::optional<std::string> GetMonitorDevicePathForGdiName(const std::wstring& gdiName);
         static std::optional<std::string> GetEdidHexForDeviceInstanceId(const std::wstring& deviceInstanceId);
         static std::optional<std::string> GetWmiKeyForDeviceInstanceId(const std::wstring& deviceInstanceId);
+        // Check if a display (identified by its GDI name, e.g. "\\.\DISPLAY1") is currently enabled
+        static bool IsDisplayEnabled(const std::wstring& gdiName);
+        // Enable or disable a display by GDI name. Returns true on success.
+        static bool SetDisplayEnabled(const std::wstring& gdiName, bool enable);
 
         std::vector<std::pair<GUID, std::wstring>> ListDisplays(const std::map<GUID, std::unique_ptr<VirtualDisplay>, std::less<GUID>>& virtualDisplays) const;
         std::vector<vdc::Topology> GetActiveDisplayTopology(const std::vector<std::pair<GUID,std::wstring>>& virtualDisplays);

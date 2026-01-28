@@ -18,6 +18,7 @@
 #include <codecvt>
 #include <thread>
 #include <unordered_set>
+#include <regex>
 
 using namespace vdc;
 using namespace vdisplay;
@@ -29,6 +30,40 @@ VirtualDisplayService::VirtualDisplayService() {
 
 VirtualDisplayService::~VirtualDisplayService() = default;
 
+static std::wstring MakeUniqueDeviceName(const std::wstring& requested,
+                                         const std::map<GUID, std::unique_ptr<VirtualDisplay>>& virtualDisplays)
+{
+    auto nameExists = [&](const std::wstring& name) {
+        for (const auto& vd : virtualDisplays) {
+            if (vd.second->deviceName == name) return true;
+        }
+        return false;
+    };
+
+    std::wstring originalName = requested;
+    std::wstring candidateName = originalName;
+
+    std::wregex reSuffix(L"^(.*)_(\\d+)$");
+    std::wstring baseName = originalName;
+    int suffix = 1;
+    std::wsmatch match;
+    if (std::regex_match(originalName, match, reSuffix) && match.size() == 3) {
+        baseName = match[1].str();
+        try {
+            suffix = std::stoi(match[2].str()) + 1;
+        } catch (...) {
+            suffix = 1;
+        }
+    }
+
+    while (nameExists(candidateName)) {
+        candidateName = baseName + L"_" + std::to_wstring(suffix);
+        ++suffix;
+    }
+
+    return candidateName;
+}
+
 bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, const std::optional<GUID>& guidOpt) {
 
     try {
@@ -37,8 +72,21 @@ bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, cons
 	    GUID displayId = StringToGuid(displayConfig.displayId).value();
         float fpsHz = static_cast<float>(virtualDisplay.refreshRateMilliHz) / 1000.0f;
 
-        auto gdiName = m_sudoVdaDriver->CreateVirtualDisplay(GuidToString(displayId).c_str(), WStringToString(virtualDisplay.deviceName).c_str(),
-                                                             virtualDisplay.width, virtualDisplay.height, fpsHz, displayId);
+        // Ensure the device name is unique among existing virtual displays.
+        std::wstring newName = MakeUniqueDeviceName(virtualDisplay.deviceName, virtualDisplays_);
+        if (newName != virtualDisplay.deviceName) {
+            std::string oldNameStr = WStringToString(virtualDisplay.deviceName);
+            std::string newNameStr = WStringToString(newName);
+            LOG_INFO("A virtual display with the name '%s' already exists. Renamed to '%s'", oldNameStr.c_str(), newNameStr.c_str());
+            virtualDisplay.deviceName = newName;
+        }
+
+        auto deviceName = WStringToString(virtualDisplay.deviceName);
+
+        auto gdiName = m_sudoVdaDriver->CreateVirtualDisplay(GuidToString(displayId).c_str(), 
+                                                             deviceName.c_str(),
+                                                             virtualDisplay.width, virtualDisplay.height, fpsHz, 
+                                                             displayId);
 
         if (!gdiName) {
             LOG_ERROR("Failed to add virtual display");
@@ -74,7 +122,7 @@ bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, cons
             }).detach();
         }
 
-        if (configStore_) {
+        if (configStore_ && virtualDisplay.deviceName != DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME) {
             DisplayConfig cfgCopy = displayConfig;
             std::string devNameCopy = WStringToString(virtualDisplay.deviceName);
             std::thread([this, displayId, virtualDisplay = std::move(virtualDisplay), cfgCopy, devNameCopy]() mutable {
@@ -241,6 +289,48 @@ bool VirtualDisplayService::SetHdr(const std::wstring gdiName, bool enable) {
         std::string gdiNameStr = WStringToString(gdiName);
 		std::string colorSpace = enable ? "HDR" : "SDR";
         LOG_ERROR("Failed to set %s with gdiName (%s) : %s", colorSpace, gdiName, ex.what());
+        return false;
+    }
+}
+
+bool VirtualDisplayService::IsDisplayEnabled(const std::wstring gdiName) {
+    try {
+        if (gdiName.empty()) {
+            throw std::exception("GdiName was empty");
+        }
+
+        if (gdiName.rfind('\\.\\\\', 0) == 0) {
+            throw std::exception("Invalid gdiName");
+        }
+
+        return DisplayConfigUtils::IsDisplayEnabled(gdiName);
+    }
+    catch (const std::exception& ex) {
+        std::string gdiNameStr = WStringToString(gdiName);
+        LOG_ERROR("Failed to get enabled state for display with gdiName (%s) : %s", gdiName, ex.what());
+        return false;
+    }
+}
+
+bool VirtualDisplayService::SetDisplayEnabled(const std::wstring gdiName, bool enable) {
+    try {
+        if (gdiName.empty()) {
+            throw std::exception("GdiName was empty");
+        }
+
+        if (gdiName.rfind('\\.\\\\', 0) == 0) {
+            throw std::exception("Invalid gdiName");
+        }
+
+        if (!DisplayConfigUtils::SetDisplayEnabled(gdiName, enable)) {
+            throw std::exception("Failed to set enabled state on display");
+        }
+
+        return true;
+    }
+    catch (const std::exception& ex) {
+        std::string gdiNameStr = WStringToString(gdiName);
+        LOG_ERROR("Failed to set enabled state with gdiName (%s) : %s", gdiName, ex.what());
         return false;
     }
 }

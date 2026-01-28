@@ -2,7 +2,7 @@
 
 #include "utils/CliParser.h"
 #include "utils/Logger.h"
-#include "handlers/VerbHandlers.h"
+#include "app/VerbHandlers.h"
 #include "client/TrayServer.h"
 #include <iostream>
 

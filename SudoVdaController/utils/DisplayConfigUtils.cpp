@@ -645,6 +645,162 @@ bool DisplayConfigUtils::ApplyTopologyFromStore(const std::map<std::string, bool
     return true;
 }
 
+bool DisplayConfigUtils::IsDisplayEnabled(const std::wstring& gdiName)
+{
+    if (gdiName.empty()) return false;
+
+    UINT32 pathCount = 0, modeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) return false;
+
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) return false;
+
+    for (UINT32 i = 0; i < pathCount; ++i) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
+        src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        src.header.size = sizeof(src);
+        src.header.adapterId = paths[i].sourceInfo.adapterId;
+        src.header.id = paths[i].sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) continue;
+        if (std::wstring(src.viewGdiDeviceName) == gdiName) return true;
+    }
+
+    return false;
+}
+
+bool DisplayConfigUtils::SetDisplayEnabled(const std::wstring& gdiName, bool enable)
+{
+    if (gdiName.empty()) return false;
+
+    // Get currently active paths
+    UINT32 aPathCount = 0, aModeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &aPathCount, &aModeCount) != ERROR_SUCCESS) return false;
+    std::vector<DISPLAYCONFIG_PATH_INFO> aPaths(aPathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> aModes(aModeCount);
+    if (aPathCount > 0) {
+        if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &aPathCount, aPaths.data(), &aModeCount, aModes.data(), nullptr) != ERROR_SUCCESS) return false;
+    }
+
+    // Get all possible paths (we will pick from these which to make active)
+    UINT32 pathCount = 0, modeCount = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) return false;
+    if (pathCount == 0) return false;
+
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+    if (QueryDisplayConfig(QDC_ALL_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS) return false;
+
+    // Helper to compare paths (adapter + source id + target id)
+    auto samePath = [](const DISPLAYCONFIG_PATH_INFO& a, const DISPLAYCONFIG_PATH_INFO& b) -> bool {
+        return a.sourceInfo.adapterId.HighPart == b.sourceInfo.adapterId.HighPart &&
+            a.sourceInfo.adapterId.LowPart == b.sourceInfo.adapterId.LowPart &&
+            a.sourceInfo.id == b.sourceInfo.id &&
+            a.targetInfo.adapterId.HighPart == b.targetInfo.adapterId.HighPart &&
+            a.targetInfo.adapterId.LowPart == b.targetInfo.adapterId.LowPart &&
+            a.targetInfo.id == b.targetInfo.id;
+        };
+
+    // Build newPaths starting from currently active paths (but use the canonical entries from `paths`)
+    std::vector<DISPLAYCONFIG_PATH_INFO> newPaths;
+    newPaths.reserve(pathCount);
+
+    for (UINT32 i = 0; i < pathCount; ++i) {
+        // find if this `paths[i]` is currently active
+        bool isActive = false;
+        for (UINT32 j = 0; j < aPathCount; ++j) {
+            if (samePath(paths[i], aPaths[j])) { isActive = true; break; }
+        }
+        if (isActive) {
+            // if disabling and this path corresponds to gdiName, skip it
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
+            src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            src.header.size = sizeof(src);
+            src.header.adapterId = paths[i].sourceInfo.adapterId;
+            src.header.id = paths[i].sourceInfo.id;
+            if (DisplayConfigGetDeviceInfo(&src.header) == ERROR_SUCCESS) {
+                if (std::wstring(src.viewGdiDeviceName) == gdiName && !enable) {
+                    // skip -> disable
+                    continue;
+                }
+            }
+            newPaths.push_back(paths[i]);
+        }
+    }
+
+    // If enabling, ensure any path entries that match gdiName are present
+    if (enable) {
+        for (UINT32 i = 0; i < pathCount; ++i) {
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
+            src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            src.header.size = sizeof(src);
+            src.header.adapterId = paths[i].sourceInfo.adapterId;
+            src.header.id = paths[i].sourceInfo.id;
+            if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) continue;
+            if (std::wstring(src.viewGdiDeviceName) == gdiName) {
+                // check if already present in newPaths
+                bool present = false;
+                for (const auto& p : newPaths) { if (samePath(p, paths[i])) { present = true; break; } }
+                if (!present) newPaths.push_back(paths[i]);
+            }
+        }
+    }
+
+    // Nothing to change?
+    // Build a quick comparison against active paths
+    if (!newPaths.empty() && aPathCount == newPaths.size()) {
+        bool identical = true;
+        for (size_t i = 0; i < newPaths.size(); ++i) {
+            if (!samePath(newPaths[i], aPaths[i])) { identical = false; break; }
+        }
+        if (identical) return true;
+    }
+
+    // Build compact modes array and remap mode indices like in ApplyTopologyFromStore
+    std::vector<DISPLAYCONFIG_MODE_INFO> suppliedModes;
+    suppliedModes.reserve(modeCount);
+    std::unordered_map<UINT32, UINT32> modeIndexMap;
+
+    auto ensureMode = [&](UINT32 oldIdx) -> UINT32 {
+        if (oldIdx == DISPLAYCONFIG_PATH_MODE_IDX_INVALID) return DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+        auto it = modeIndexMap.find(oldIdx);
+        if (it != modeIndexMap.end()) return it->second;
+        UINT32 newIdx = static_cast<UINT32>(suppliedModes.size());
+        suppliedModes.push_back(modes[oldIdx]);
+        modeIndexMap[oldIdx] = newIdx;
+        return newIdx;
+        };
+
+    // Remap mode indices in a local copy
+    std::vector<DISPLAYCONFIG_PATH_INFO> pathsForApply = newPaths;
+    for (auto& p : pathsForApply) {
+        UINT32 sidx = p.sourceInfo.modeInfoIdx;
+        UINT32 tidx = p.targetInfo.modeInfoIdx;
+        UINT32 newS = ensureMode(sidx);
+        UINT32 newT = ensureMode(tidx);
+        p.sourceInfo.modeInfoIdx = newS;
+        p.targetInfo.modeInfoIdx = newT;
+    }
+
+    LONG status = SetDisplayConfig(
+        static_cast<UINT32>(pathsForApply.size()), pathsForApply.data(),
+        static_cast<UINT32>(suppliedModes.size()), suppliedModes.data(),
+        SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE | SDC_ALLOW_CHANGES
+    );
+
+    if (status != ERROR_SUCCESS && status != ERROR_INVALID_PARAMETER) {
+        char msgbuf[512] = {};
+        FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+            NULL, (DWORD)status, 0, msgbuf, (DWORD)sizeof(msgbuf), NULL);
+        std::string msg = msgbuf[0] ? std::string(msgbuf) : std::string();
+        LOG_ERROR("SetDisplayConfig returned %ld. %s", status, msg.c_str());
+        return false;
+    }
+
+    return true;
+}
+
+
 std::optional<std::wstring> DisplayConfigUtils::GetMonitorFriendlyNameForGdiName(const std::wstring& gdiName) {
     if (gdiName.empty()) return std::nullopt;
 

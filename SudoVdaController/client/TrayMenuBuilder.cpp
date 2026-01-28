@@ -120,6 +120,24 @@ namespace vdc {
                 AppendMenuW(hSub, MF_STRING, id, L"Remove");
                 ctx->menuMap->emplace(id, MenuItem{ guid, DisplayAction::Remove });
                 ++id;
+            } else {
+                MenuItem mi{};
+
+                mi.guid = guid;
+                mi.gdiName = gdiName;
+                mi.physicalLabel = label;
+
+                if (ctx->service->IsDisplayEnabled(gdiName)) {
+                    AppendMenuW(hSub, MF_STRING, id, L"Disable");
+                    mi.action = DisplayAction::ToggleEnable;
+                }
+                else {
+                    AppendMenuW(hSub, MF_STRING, id, L"Enable");
+                    mi.action = DisplayAction::ToggleEnable;
+                }
+
+                ctx->menuMap->emplace(id, mi);
+                ++id;
             }
 
             // Attach submenu to main menu

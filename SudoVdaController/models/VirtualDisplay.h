@@ -4,8 +4,10 @@
 
 namespace vdc {
 
+	const std::wstring DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME = L"SudoMakerVDD";
+
     struct VirtualDisplay {
-        std::wstring deviceName = L"SudoMakerVDD";
+        std::wstring deviceName = DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME;
         std::wstring gdiName;
         int width = 1920;
         int height = 1080;

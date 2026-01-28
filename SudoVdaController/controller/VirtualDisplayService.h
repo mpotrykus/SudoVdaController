@@ -26,6 +26,8 @@ namespace vdc {
         bool SetPrimary(const std::wstring gdiName);
         bool IsHdrEnabled(const std::wstring gdiName);
         bool SetHdr(const std::wstring gdiName, bool enable);
+        bool IsDisplayEnabled(const std::wstring gdiName);
+        bool SetDisplayEnabled(const std::wstring gdiName, bool enable);
         bool DisplaySupportsHdr(const std::wstring gdiName);
         bool Query(const std::wstring gdiName);
 
