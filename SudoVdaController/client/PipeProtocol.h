@@ -7,7 +7,7 @@
 
 namespace vdc {
 
-    class VirtualDisplayController;
+    class VirtualDisplayService;
 
     // Parse "key=value&key2=value2" into a map
     std::map<std::string, std::string> ParseKvForm(const std::string& s);
@@ -23,7 +23,7 @@ namespace vdc {
 
     // Main pipe server loop (runs in its own thread)
     void RunPipeServerLoop(const std::wstring& pipeName,
-        VirtualDisplayController* controller,
+        VirtualDisplayService* controller,
         std::mutex* controllerMutex);
 
 } // namespace vdc

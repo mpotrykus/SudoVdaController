@@ -1,56 +1,49 @@
 #pragma once
 
+#include "../models/VirtualDisplay.h"
+#include "../utils/ConfigStore.h"
+#include "driver/SudovdaDriver.h"
+
+#include <map>
+#include <memory>
 #include <string>
 #include <optional>
-#include <windows.h>
-#include <guiddef.h>
+#include <vector>
+
 
 namespace vdc {
 
-    class SudovdaDriver;
-
-    // High-level orchestrator for virtual display operations.
-    // Delegates:
-    //   - driver I/O to SudovdaDriver
-    //   - topology queries to DisplayTopology
-    //   - layout computation to DisplayLayout
     class VirtualDisplayService {
     public:
+
         VirtualDisplayService();
         ~VirtualDisplayService();
 
-        // Create a virtual display and return its GDI device name.
-        std::optional<std::wstring> CreateVirtualDisplay(
-            const char* clientUid,
-            const char* clientName,
-            uint32_t width,
-            uint32_t height,
-            float fps,
-            const GUID& guid
-        );
-
-        // Remove a virtual display by GUID.
+        bool CreateVirtualDisplay(const VirtualDisplay& cfg, const std::optional<GUID>& guid = std::nullopt);
         bool RemoveVirtualDisplay(const GUID& guid);
 
-        // Change mode (width/height/refresh) for a display by GDI name.
-        // If isolatedMode = true, applies the isolated layout algorithm.
-        bool ChangeDisplaySettings(
-            const std::wstring& gdiName,
-            int width,
-            int height,
-            int refreshMilliHz,
-            bool isolatedMode
-        );
+        bool SetMode(const std::wstring gdiName, int w, int h, int refreshMilliHz, bool isolatedLayout);
+        bool SetPrimary(const std::wstring gdiName);
+        bool IsHdrEnabled(const std::wstring gdiName);
+        bool SetHdr(const std::wstring gdiName, bool enable);
+        bool DisplaySupportsHdr(const std::wstring gdiName);
+        bool Query(const std::wstring gdiName);
 
-        // Find adapter + target IDs for a GDI device name.
-        bool FindDisplayIds(
-            const std::wstring& gdiName,
-            LUID& adapterId,
-            uint32_t& targetId
-        );
+        size_t CountDisplays() const;
+        std::vector<std::pair<GUID, std::wstring>> ListDisplays() const;
+
+        bool AddNewDisplayToConfigStore(GUID displayId, VirtualDisplay virtualDisplay, DisplayConfig displayConfig);
+        DisplayConfig FindExistingDisplayConfigOrGenerate(const VirtualDisplay& cfg, const std::optional<GUID>& guidOpt);
+        DisplayConfig UpdateConfigTopogology(DisplayConfig displayConfig, bool overrideEnabled);
 
     private:
-        SudovdaDriver* m_driver; // owned
+        SudovdaDriver* m_sudoVdaDriver;
+
+		std::unique_ptr<VirtualDisplayService> virtualDisplayService_;
+        std::map<GUID, std::unique_ptr<VirtualDisplay>> virtualDisplays_;
+        std::unique_ptr<ConfigStore> configStore_;
+
+        std::vector<vdc::Topology> GetCurrentTopology(const std::map<GUID, std::unique_ptr<VirtualDisplay>>& virtualDisplays);
     };
 
-} // namespace vdc
+}

@@ -27,9 +27,6 @@
     <ClCompile Include="utils\HdrUtils.cpp">
       <Filter>utils</Filter>
     </ClCompile>
-    <ClCompile Include="controller\VirtualDisplayController.cpp">
-      <Filter>controller</Filter>
-    </ClCompile>
     <ClCompile Include="controller\VirtualDisplayService.cpp">
       <Filter>controller</Filter>
     </ClCompile>
@@ -77,9 +74,6 @@
     </ClInclude>
     <ClInclude Include="models\VirtualDisplay.h">
       <Filter>models</Filter>
-    </ClInclude>
-    <ClInclude Include="controller\VirtualDisplayController.h">
-      <Filter>controller</Filter>
     </ClInclude>
     <ClInclude Include="controller\VirtualDisplayService.h">
       <Filter>controller</Filter>

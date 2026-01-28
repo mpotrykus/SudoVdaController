@@ -4,7 +4,7 @@
 #include "../utils/Logger.h"
 #include "../utils/GuidUtils.h"
 #include "../models/VirtualDisplay.h"
-#include "../controller/VirtualDisplayController.h"
+#include "../controller/VirtualDisplayService.h"
 
 #include <windows.h>
 #include <string>
@@ -125,8 +125,8 @@ namespace vdc {
     // Pipe server loop
     // -----------------------------------------------------------------------------
     void RunPipeServerLoop(const std::wstring& pipeName,
-        VirtualDisplayController* controller,
-        std::mutex* controllerMutex)
+        VirtualDisplayService* service,
+        std::mutex* serviceMutex)
     {
         while (true) {
             HANDLE hPipe = CreateNamedPipeW(
@@ -174,10 +174,10 @@ namespace vdc {
             // ---------------------------------------------------------------------
             // Execute verb
             // ---------------------------------------------------------------------
-            std::string response = "{\"error\":\"unknown verb\"}";
+            std::string response;
 
             {
-                std::lock_guard<std::mutex> lk(*controllerMutex);
+                std::lock_guard<std::mutex> lk(*serviceMutex);
 
                 if (verb == "create") {
                     VirtualDisplay cfg;
@@ -203,16 +203,18 @@ namespace vdc {
                     if (kv.count("adapter"))
                         cfg.adapterLuid = std::stoull(kv["adapter"]);
 
-                    auto res = controller->CreateDisplay(cfg);
-                    response = res ? "{\"ok\":1}" : "{\"error\":\"create failed\"}";
+                    response = service->CreateVirtualDisplay(cfg)
+                        ? "Successfully created virtual display"
+                        : "Failed to create virtual display";
                 }
 
                 else if (verb == "remove") {
                     if (kv.count("guid")) {
                         auto g = StringToGuid(kv["guid"]);
                         if (g) {
-                            bool ok2 = controller->RemoveDisplay(*g);
-                            response = ok2 ? "{\"ok\":1}" : "{\"error\":\"remove failed\"}";
+                            response = service->RemoveVirtualDisplay(*g)
+                                ? "Successfully removed virtual display"
+                                : "Failed to remove virtual display";
                         }
                     }
                 }
@@ -221,8 +223,9 @@ namespace vdc {
                     if (kv.count("guid")) {
                         auto g = StringToGuid(kv["guid"]);
                         if (g) {
-                            bool ok2 = controller->SetPrimary(*g);
-                            response = ok2 ? "{\"ok\":1}" : "{\"error\":\"primary failed\"}";
+                            // response = service->SetPrimary(*g)
+                            //    ? "Successfully set display as primary"
+                            //    : "Failed to set display as primary";
                         }
                     }
                 }
@@ -232,8 +235,9 @@ namespace vdc {
                         auto g = StringToGuid(kv["guid"]);
                         if (g) {
                             bool enable = (kv["enable"] == "1");
-                            bool ok2 = controller->SetHdr(*g, enable);
-                            response = ok2 ? "{\"ok\":1}" : "{\"error\":\"hdr failed\"}";
+                            // response = service->SetHdr(*g, enable)
+                            //    ? "Successfully set HDR on display"
+                            //    : "Failed to set HDR on display";
                         }
                     }
                 }
@@ -244,25 +248,29 @@ namespace vdc {
                     {
                         auto g = StringToGuid(kv["guid"]);
                         if (g) {
-                            bool ok2 = controller->SetMode(
-                                *g,
-                                std::stoi(kv["w"]),
-                                std::stoi(kv["h"]),
-                                std::stoi(kv["refresh"]),
-                                std::stoi(kv["iso"]) != 0
-                            );
-                            response = ok2 ? "{\"ok\":1}" : "{\"error\":\"mode failed\"}";
+                            //bool ok = service->SetMode(
+                            //    *g,
+                            //    std::stoi(kv["w"]),
+                            //    std::stoi(kv["h"]),
+                            //    std::stoi(kv["refresh"]),
+                            //    std::stoi(kv["iso"]) != 0
+                            //);
+                            // 
+                            //response = ok
+                            //    ? "Successfully set mode on display"
+                            //    : "Failed to set mode on display";
                         }
                     }
                 }
 
                 else if (verb == "query") {
                     if (kv.count("guid")) {
-                        auto g = StringToGuid(kv["guid"]);
+                        /*auto g = StringToGuid(kv["guid"]);
                         if (g) {
-                            bool ok = controller->Query(*g);
-                            response = ok ? "{\"ok\":1}" : "{\"error\":\"query failed\"}";
-                        }
+                            //response = service->Query(*g)
+                            //    ? "QUERY RESULTS"
+                            //    : "Failed to query display";
+                        }*/
                     }
                 }
 

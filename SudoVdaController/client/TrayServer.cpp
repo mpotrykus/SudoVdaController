@@ -1,7 +1,7 @@
 #include "../pch.h"
 #include "TrayServer.h"
 
-#include "../controller/VirtualDisplayController.h"
+#include "../controller/VirtualDisplayservice.h"
 #include "../utils/Logger.h"
 
 #include "TrayWindow.h"
@@ -29,12 +29,12 @@ namespace vdc {
     int RunTrayServer(const std::wstring& pipeName) {
         LOG_INFO("TrayServer starting...");
 
-        VirtualDisplayController controller;
-        std::mutex controllerMutex;
+        VirtualDisplayService service;
+        std::mutex serviceMutex;
         std::unordered_map<UINT, MenuItem> menuMap;
 
-        g_ctx.controller = &controller;
-        g_ctx.controllerMutex = &controllerMutex;
+        g_ctx.service = &service;
+        g_ctx.serviceMutex = &serviceMutex;
         g_ctx.menuMap = &menuMap;
         g_ctx.pipeName = pipeName;
 
@@ -49,7 +49,7 @@ namespace vdc {
 
         // Start pipe listener thread for CLI <-> tray communication
         std::thread pipeThread([&]() {
-            RunPipeServerLoop(g_ctx.pipeName, &controller, &controllerMutex);
+            RunPipeServerLoop(g_ctx.pipeName, &service, &serviceMutex);
             });
 
         // Standard message loop

@@ -9,7 +9,7 @@
 
 namespace vdc {
 
-    class VirtualDisplayController;
+    class VirtualDisplayService;
 
     // Matches the original enum from your monolithic file
     enum class DisplayAction : int {
@@ -32,14 +32,14 @@ namespace vdc {
         std::optional<class VirtualDisplay> cfg;
 
         // For physical displays
-        std::wstring physicalName;
+        std::wstring gdiName;
         std::wstring physicalLabel;
     };
 
     // Shared context from TrayServer
     struct TrayContext {
-        VirtualDisplayController* controller = nullptr;
-        std::mutex* controllerMutex = nullptr;
+        VirtualDisplayService* service = nullptr;
+        std::mutex* serviceMutex = nullptr;
         std::unordered_map<UINT, MenuItem>* menuMap = nullptr;
         std::wstring pipeName;
     };

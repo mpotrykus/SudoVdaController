@@ -1,138 +1,384 @@
 #include "../pch.h"
-#include "VirtualDisplayService.h"
 
+#include "VirtualDisplayService.h"
 #include "driver/SudovdaDriver.h"
-#include "displayconfig/DisplayTopology.h"
-#include "displayconfig/DisplayLayout.h"
-#include "displayconfig/DisplayGeometry.h"
+
+#include "../utils/JsonUtils.h"
+#include "../utils/GuidUtils.h"
+#include "../utils/DisplayConfigUtils.h"
+#include "../utils/HdrUtils.h"
+#include "../utils/StringUtils.h"
+#include "../utils/ContainerUtils.h"
+#include "../utils/ConfigStore.h"
 
 #include "../utils/Logger.h"
 
-namespace vdc {
+#include <iostream>
+#include <locale>
+#include <codecvt>
+#include <thread>
+#include <unordered_set>
 
-    VirtualDisplayService::VirtualDisplayService() {
-        m_driver = new SudovdaDriver();
-    }
+using namespace vdc;
+using namespace vdisplay;
 
-    VirtualDisplayService::~VirtualDisplayService() {
-        delete m_driver;
-    }
+VirtualDisplayService::VirtualDisplayService() {
+    m_sudoVdaDriver = new SudovdaDriver();
+    configStore_ = std::make_unique<ConfigStore>();
+}
 
-    // -----------------------------------------------------------------------------
-    // CreateVirtualDisplay
-    // -----------------------------------------------------------------------------
-    std::optional<std::wstring> VirtualDisplayService::CreateVirtualDisplay(
-        const char* clientUid,
-        const char* clientName,
-        uint32_t width,
-        uint32_t height,
-        float fps,
-        const GUID& guid
-    ) {
-        return m_driver->CreateVirtualDisplay(
-            clientUid,
-            clientName,
-            width,
-            height,
-            fps,
-            guid
-        );
-    }
+VirtualDisplayService::~VirtualDisplayService() = default;
 
-    // -----------------------------------------------------------------------------
-    // RemoveVirtualDisplay
-    // -----------------------------------------------------------------------------
-    bool VirtualDisplayService::RemoveVirtualDisplay(const GUID& guid) {
-        return m_driver->RemoveVirtualDisplay(guid);
-    }
+bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, const std::optional<GUID>& guidOpt) {
 
-    // -----------------------------------------------------------------------------
-    // FindDisplayIds
-    // -----------------------------------------------------------------------------
-    bool VirtualDisplayService::FindDisplayIds(
-        const std::wstring& gdiName,
-        LUID& adapterId,
-        uint32_t& targetId
-    ) {
-        return FindDisplayIds(gdiName, adapterId, targetId);
-    }
+    try {
+        VirtualDisplay virtualDisplay = cfg;
+	    DisplayConfig displayConfig = FindExistingDisplayConfigOrGenerate(virtualDisplay, guidOpt);
+	    GUID displayId = StringToGuid(displayConfig.displayId).value();
+        float fpsHz = static_cast<float>(virtualDisplay.refreshRateMilliHz) / 1000.0f;
 
-    // -----------------------------------------------------------------------------
-    // ChangeDisplaySettings
-    // -----------------------------------------------------------------------------
-    bool VirtualDisplayService::ChangeDisplaySettings(
-        const std::wstring& gdiName,
-        int width,
-        int height,
-        int refreshMilliHz,
-        bool isolatedMode
-    ) {
-        // Step 1: Query current topology
-        auto snapOpt = QueryActiveTopology();
-        if (!snapOpt) {
-            LOG_ERROR("Failed to query display topology");
+        auto gdiName = m_sudoVdaDriver->CreateVirtualDisplay(GuidToString(displayId).c_str(), WStringToString(virtualDisplay.deviceName).c_str(),
+                                                             virtualDisplay.width, virtualDisplay.height, fpsHz, displayId);
+
+        if (!gdiName) {
+            LOG_ERROR("Failed to add virtual display");
             return false;
         }
 
-        auto snap = std::move(*snapOpt);
+        virtualDisplay.gdiName = *gdiName;
+        auto gdiNameResult = virtualDisplay.gdiName;
+        auto session = std::make_unique<VirtualDisplay>(virtualDisplay);
+        virtualDisplays_.emplace(displayId, std::move(session));
 
-        // Step 2: Extract rects
-        auto rects = ExtractRects(snap);
+        if (cfg.hdr) {
+            std::string devNameCopy = WStringToString(virtualDisplay.deviceName);
+            std::thread([this, gdiNameResult, devNameCopy]() {
+                auto res = SetHdr(gdiNameResult, true);
+                if (res) {
+                    LOG_INFO("Succesfully enabled HDR on device '%s'", devNameCopy);
+                } else {
+                    LOG_ERROR("Failed to enable HDR on device '%s'", devNameCopy);
+                }
+            }).detach();
+        }
 
-        // Step 3: Find the target display
-        int targetIndex = -1;
-        for (size_t i = 0; i < snap.paths.size(); ++i) {
-            DISPLAYCONFIG_SOURCE_DEVICE_NAME src{};
-            src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
-            src.header.size = sizeof(src);
-            src.header.adapterId = snap.paths[i].sourceInfo.adapterId;
-            src.header.id = snap.paths[i].sourceInfo.id;
+        if (cfg.primary) {
+            std::string devNameCopy = WStringToString(virtualDisplay.deviceName);
+            std::thread([this, gdiNameResult, devNameCopy]() {
+                auto res = SetPrimary(gdiNameResult);
+                if (res) {
+                    LOG_INFO("Succesfully set '%s' as primary device", devNameCopy);
+                } else {
+                    LOG_ERROR("Failed to set '%s' as primary device", devNameCopy);
+                }
+            }).detach();
+        }
 
-            if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS)
-                continue;
+        if (configStore_) {
+            DisplayConfig cfgCopy = displayConfig;
+            std::string devNameCopy = WStringToString(virtualDisplay.deviceName);
+            std::thread([this, displayId, virtualDisplay = std::move(virtualDisplay), cfgCopy, devNameCopy]() mutable {
+                auto res = AddNewDisplayToConfigStore(displayId, virtualDisplay, cfgCopy);
+                if (res) {
+                    std::string message = "Successfully saved virtual device to config for '" + devNameCopy + "'";
+                    LOG_INFO(message.c_str());
+                }
+                else {
+                    std::string message = "Failed to save virtual device to config for '" + devNameCopy + "'";
+                    LOG_ERROR(message.c_str());
+                }
+            }).detach();
+        }
 
-            if (std::wstring_view(src.viewGdiDeviceName) == gdiName) {
-                targetIndex = (int)i;
-                break;
+        std::string createdName = WStringToString(cfg.deviceName);
+        std::string createdGdi = WStringToString(gdiNameResult);
+        std::string createdId = displayConfig.displayId;
+        std::string successMsg = "Created '" + createdName + "' (" + createdGdi + ") with id: " + createdId;
+        LOG_SUCCESS(successMsg.c_str());
+        return true;
+    }
+    catch (const std::exception& ex) {
+        LOG_ERROR("Failed to create virtual display: %s", ex.what());
+        return false;
+    }
+}
+
+bool VirtualDisplayService::RemoveVirtualDisplay(const GUID& guid) {
+
+    try {
+        if (guid == GUID{}) {
+            throw std::exception("Invalid GUID");
+        }
+
+        auto virtualDisplay = virtualDisplays_.find(guid);
+        if (virtualDisplay == virtualDisplays_.end()) {
+            throw std::exception("The virtual display could not be found");
+        }
+
+        if (configStore_) {
+            auto displayConfigOpt = configStore_->GetByDisplayId(GuidToString(guid));
+            if (displayConfigOpt.has_value()) {
+                auto displayConfig = UpdateConfigTopogology(displayConfigOpt.value(), true);
+                configStore_->SaveDisplayConfig(WStringToString(virtualDisplay->second->deviceName), displayConfig);
+            }
+            else {
+                LOG_WARN("No virtual display config was found in the store for removed display: %s", GuidToString(guid));
             }
         }
 
-        if (targetIndex < 0) {
-            LOG_ERROR("Display not found: %ls", gdiName.c_str());
-            return false;
+        if (!m_sudoVdaDriver->RemoveVirtualDisplay(guid)) {
+            throw std::exception("Driver failed to remove virtual display");
         }
 
-        // Step 4: Update mode for target display
-        int modeIndex = rects[targetIndex].modeIndex;
-        if (modeIndex < 0 || modeIndex >= (int)snap.modes.size()) {
-            LOG_ERROR("Invalid mode index");
-            return false;
+        virtualDisplays_.erase(virtualDisplay);
+        
+        return true;
+    } catch (const std::exception& ex) {
+		std::string guidStr = GuidToString(guid);
+        LOG_ERROR("Failed to remove virtual display with id (%s): %s", guidStr, ex.what());
+        return false;
+	}
+}
+
+bool VirtualDisplayService::SetMode(const std::wstring gdiName, int w, int h, int refreshMilliHz, bool isolatedLayout) {
+    try {
+        if (gdiName.empty()) {
+            throw std::exception("GdiName was empty");
         }
 
-        auto& mode = snap.modes[modeIndex].sourceMode;
-        mode.width = width;
-        mode.height = height;
-        snap.paths[targetIndex].targetInfo.refreshRate = { (UINT32)refreshMilliHz, 1000 };
-
-        // Step 5: If isolated mode, compute new layout
-        if (isolatedMode) {
-            auto newRects = ComputeIsolatedLayout(rects);
-
-            if (!ApplyTopology(snap, newRects)) {
-                LOG_ERROR("Failed to apply isolated layout");
-                return false;
-            }
-
-            return true;
+        if (gdiName.rfind('\\.\\\\', 0) == 0) {
+            throw std::exception("Invalid gdiName");
         }
 
-        // Step 6: Apply normal topology
-        if (!ApplyTopology(snap, rects)) {
-            LOG_ERROR("Failed to apply display settings");
-            return false;
+        if (!DisplayConfigUtils::ApplyModeForDevice(gdiName, w, h, refreshMilliHz, isolatedLayout)) {
+            throw std::exception("Failed to set mode on display");
+		}
+
+        return true;
+    } catch (const std::exception& ex) {
+		std::string gdiNameStr = WStringToString(gdiName);
+        LOG_ERROR("Failed to set mode with gdiName (%s) : %s", gdiNameStr, ex.what());
+        return false;
+    }
+}
+
+bool VirtualDisplayService::SetPrimary(const std::wstring gdiName) {
+    try {
+        if (gdiName.empty()) {
+            throw std::exception("GdiName was empty");
+        }
+
+        if (gdiName.rfind('\\.\\\\', 0) == 0) {
+            throw std::exception("Invalid gdiName");
+        }
+
+        if (!DisplayConfigUtils::MakeDevicePrimary(gdiName)) {
+			throw std::exception("Failed to set display as primary");
         }
 
         return true;
+    } catch (const std::exception& ex) {
+        std::string gdiNameStr = WStringToString(gdiName);
+        LOG_ERROR("Failed to set primary with gdiName (%s) : %s", gdiNameStr, ex.what());
+        return false;
+    }
+}
+
+bool VirtualDisplayService::DisplaySupportsHdr(const std::wstring gdiName) {
+    try {
+        if (gdiName.empty()) {
+            throw std::exception("GdiName was empty");
+        }
+
+        if (gdiName.rfind('\\.\\\\', 0) == 0) {
+            throw std::exception("Invalid gdiName");
+        }
+
+        return HdrUtils::DisplaySupportsHDR(gdiName);
+    }
+    catch (const std::exception& ex) {
+        std::string gdiNameStr = WStringToString(gdiName);
+        LOG_ERROR("Failed to see HDR support for display with gdiName (%s) : %s", gdiName, ex.what());
+        return false;
+    }
+}
+
+bool VirtualDisplayService::IsHdrEnabled(const std::wstring gdiName) {
+    try {
+        if (gdiName.empty()) {
+            throw std::exception("GdiName was empty");
+        }
+
+        if (gdiName.rfind('\\.\\\\', 0) == 0) {
+            throw std::exception("Invalid gdiName");
+        }
+
+        return HdrUtils::IsHdrEnabled(gdiName);
+    }
+    catch (const std::exception& ex) {
+        std::string gdiNameStr = WStringToString(gdiName);
+        LOG_ERROR("Failed to get HDR state for display with gdiName (%s) : %s", gdiName, ex.what());
+        return false;
+    }
+}
+
+bool VirtualDisplayService::SetHdr(const std::wstring gdiName, bool enable) {
+    try {
+        if (gdiName.empty()) {
+            throw std::exception("GdiName was empty");
+        }
+
+        if (gdiName.rfind('\\.\\\\', 0) == 0) {
+            throw std::exception("Invalid gdiName");
+        }
+        
+        if (!HdrUtils::SetHdrState(gdiName, enable)) {
+			throw std::exception("Failed to set HDR state on display");
+        }
+
+        return true;
+    } catch (const std::exception& ex) {
+        std::string gdiNameStr = WStringToString(gdiName);
+		std::string colorSpace = enable ? "HDR" : "SDR";
+        LOG_ERROR("Failed to set %s with gdiName (%s) : %s", colorSpace, gdiName, ex.what());
+        return false;
+    }
+}
+
+bool VirtualDisplayService::Query(const std::wstring gdiName) {
+    try {
+        if (gdiName.empty()) {
+            throw std::exception("GdiName was empty");
+        }
+
+        if (gdiName.rfind('\\.\\\\', 0) == 0) {
+            throw std::exception("Invalid gdiName");
+        }
+
+        auto mode = DisplayConfigUtils::GetCurrentModeForDevice(gdiName);
+        if (!mode) {
+            LOG_WARN("Mode returned 'unknown'");
+            return false;
+        }
+
+        std::string gdiNameStr = WStringToString(gdiName);
+	    auto colorSpace = HdrUtils::IsHdrEnabled(gdiName) ? "HDR" : "SDR";
+        LOG_INFO("Mode Found:");
+        LOG_INFO("%s %sx%s@%s %s", gdiNameStr, std::to_string(mode->width), std::to_string(mode->height), std::to_string(mode->refreshRateMilliHz), colorSpace);
+
+        return true;
+    }
+    catch (const std::exception& ex) {
+        std::string gdiNameStr = WStringToString(gdiName);
+        LOG_ERROR("Query failed with gdiName (%s) : %s", gdiNameStr, ex.what());
+        return false;
+    }
+}
+
+size_t VirtualDisplayService::CountDisplays() const {
+    return virtualDisplays_.size();
+}
+
+std::vector<std::pair<GUID, std::wstring>> VirtualDisplayService::ListDisplays() const {
+    DisplayConfigUtils utils;
+    return utils.ListDisplays(virtualDisplays_);
+}
+
+bool VirtualDisplayService::AddNewDisplayToConfigStore(GUID displayId,
+                                                          VirtualDisplay virtualDisplay,
+                                                          DisplayConfig displayConfig)
+{
+    // Verify mode
+    auto mode = DisplayConfigUtils::GetCurrentModeForDevice(virtualDisplay.deviceName);
+    if (mode) {
+        displayConfig.displayId = vdc::GuidToString(displayId);
+        displayConfig.width = mode->width;
+        displayConfig.height = mode->height;
+        displayConfig.refreshRateHz = mode->refreshRateMilliHz;
     }
 
-} // namespace vdc
+    // Apply topology from config store (JSON is source of truth)
+    std::map<std::string, bool> topologyMap;
+    auto toApply = configStore_->GetCombinedTopology(&displayConfig,
+                                                     configStore_->GetTopologyMergePolicyDisabledWins());
+    if (!toApply.empty()) {
+
+        LOG_INFO("Applying merged topology:");
+
+        auto physicalTopologies = GetCurrentTopology(virtualDisplays_);
+        std::unordered_set<std::string> listedIds;
+        for (const auto& p : physicalTopologies) listedIds.insert(p.edid);
+
+        for (const auto& t : toApply) {
+            if (t.edid.empty() || listedIds.find(t.edid) == listedIds.end()) {
+                continue;
+            }
+
+            if (!t.edid.empty()) topologyMap.insert_or_assign(t.edid, t.enabled);
+            if (!t.displayId.empty()) topologyMap.insert_or_assign(t.displayId, t.enabled);
+            if (!t.displayName.empty()) topologyMap.insert_or_assign(t.displayName, t.enabled);
+
+            std::string message = "  (" + std::string(t.enabled ? "+" : " ") + ") " + t.displayName;
+            LOG_INFO(message.c_str());
+        }
+
+        if (!vdc::DisplayConfigUtils::ApplyTopologyFromStore(topologyMap)) {
+            LOG_ERROR("Failed to apply merged topology from config store");
+            return false;
+        }
+
+        LOG_INFO("Succesfully applied merged topology from config store");
+        return true;
+    }
+
+    // Update device topology snapshot based on what Windows actually has active now
+    displayConfig = UpdateConfigTopogology(displayConfig, false);
+
+    // Save
+    configStore_->SaveDisplayConfig(WStringToString(virtualDisplay.deviceName), displayConfig);
+}
+
+
+DisplayConfig VirtualDisplayService::FindExistingDisplayConfigOrGenerate(const VirtualDisplay& cfg, const std::optional<GUID>& guidOpt) {
+
+    if (auto mappedOpt = configStore_->GetByNameAndMode(cfg.deviceName, cfg.width, cfg.height, cfg.refreshRateMilliHz); 
+        mappedOpt.has_value() && !mappedOpt->displayId.empty()) {
+        return mappedOpt.value();
+    }
+
+    GUID g = guidOpt.value_or(GenerateGuid());
+
+    DisplayConfig dCfg;
+    dCfg.displayId = vdc::GuidToString(g);
+    dCfg.width = cfg.width;
+    dCfg.height = cfg.height;
+    dCfg.refreshRateHz = cfg.refreshRateMilliHz;
+
+    return dCfg;
+}
+
+DisplayConfig VirtualDisplayService::UpdateConfigTopogology(DisplayConfig displayConfig, bool overrideEnabled)
+{
+    auto physicalTopologies = GetCurrentTopology(virtualDisplays_);
+    for (const auto& phys : physicalTopologies) {
+        auto match = vdc::FindByKey(displayConfig.topology, phys.displayId, [](const Topology& t) { return t.displayId; });
+        if (match != displayConfig.topology.end()) {
+            if (overrideEnabled) {
+                match->enabled = phys.enabled;
+            }
+        }
+        else {
+            displayConfig.topology.push_back(phys);
+        }
+    }
+    return displayConfig;
+}
+
+std::vector<vdc::Topology> VirtualDisplayService::GetCurrentTopology(const std::map<GUID, std::unique_ptr<VirtualDisplay>>& virtualDisplays)
+{
+    auto utils = DisplayConfigUtils();
+    std::vector<std::pair<GUID, std::wstring>> vds;
+    vds.reserve(virtualDisplays.size());
+    for (const auto& kv : virtualDisplays) vds.push_back({ kv.first, kv.second->gdiName });
+    return utils.GetActiveDisplayTopology(vds);
+}

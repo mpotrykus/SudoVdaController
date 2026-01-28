@@ -109,7 +109,11 @@ namespace vdc {
         if (!IsOpen())
             return std::nullopt;
 
-        UINT refresh_millihz = static_cast<UINT>(std::lroundf(fps));
+        // Convert Hz (possibly fractional) to milliHz and round
+        UINT refresh_millihz = static_cast<UINT>(std::lroundf(fps * 1000.0f));
+
+        float dbgHz = static_cast<float>(refresh_millihz) / 1000.0f;
+        LOG_INFO("Creating virtual display %s %ux%u @ %uHz", clientName, width, height, refresh_millihz);
 
         VIRTUAL_DISPLAY_ADD_OUT output{};
         if (!AddVirtualDisplay(

@@ -1,7 +1,7 @@
 ﻿#include "../pch.h"
 #include "TrayMenuBuilder.h"
 
-#include "../controller/VirtualDisplayController.h"
+#include "../controller/VirtualDisplayservice.h"
 #include "../utils/GuidUtils.h"
 #include "../utils/Logger.h"
 
@@ -33,16 +33,16 @@ namespace vdc {
     // Build and show the tray popup menu
     // -----------------------------------------------------------------------------
     void ShowTrayMenu(HWND hWnd, TrayContext* ctx) {
-        if (!ctx || !ctx->controller || !ctx->controllerMutex || !ctx->menuMap)
+        if (!ctx || !ctx->service || !ctx->serviceMutex || !ctx->menuMap)
             return;
 
         HMENU hMenu = CreatePopupMenu();
         if (!hMenu)
             return;
 
-        std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
+        std::lock_guard<std::mutex> lk(*ctx->serviceMutex);
 
-        auto list = ctx->controller->ListDisplays();
+        auto list = ctx->service->ListDisplays();
         ctx->menuMap->clear();
 
         UINT id = MENU_BASE_ID;
@@ -55,6 +55,7 @@ namespace vdc {
             const std::wstring& label = p.second;
 
             bool isPhysical = (guid == GUID());
+            const std::wstring gdiName = ExtractGdiName(label);
 
             HMENU hSub = CreatePopupMenu();
             if (!hSub) continue;
@@ -67,7 +68,7 @@ namespace vdc {
                 mi.action = DisplayAction::SetPrimary;
 
                 if (isPhysical) {
-                    mi.physicalName = ExtractGdiName(label);
+                    mi.gdiName = gdiName;
                     mi.physicalLabel = label;
                 }
 
@@ -76,15 +77,22 @@ namespace vdc {
             }
 
             // Toggle HDR
-            {
-                AppendMenuW(hSub, MF_STRING, id, L"Toggle HDR");
+            if (ctx->service->DisplaySupportsHdr(gdiName)) {
                 MenuItem mi{};
                 mi.guid = guid;
-                mi.action = DisplayAction::ToggleHdr;
 
                 if (isPhysical) {
-                    mi.physicalName = ExtractGdiName(label);
+                    mi.gdiName = gdiName;
                     mi.physicalLabel = label;
+                }
+
+                if (ctx->service->IsHdrEnabled(gdiName)) {
+                    AppendMenuW(hSub, MF_STRING, id, L"Disable HDR");
+                    mi.action = DisplayAction::ToggleHdr;
+                }
+                else {
+                    AppendMenuW(hSub, MF_STRING, id, L"Enable HDR");
+                    mi.action = DisplayAction::ToggleHdr;
                 }
 
                 ctx->menuMap->emplace(id, mi);
@@ -100,10 +108,8 @@ namespace vdc {
                 mi.guid = guid;
                 mi.action = DisplayAction::Details;
 
-                if (isPhysical) {
-                    mi.physicalName = ExtractGdiName(label);
-                    mi.physicalLabel = label;
-                }
+                mi.gdiName = gdiName;
+                mi.physicalLabel = label;
 
                 ctx->menuMap->emplace(id, mi);
                 ++id;
@@ -132,7 +138,7 @@ namespace vdc {
             };
 
             std::vector<std::string> refreshRates = {
-                "240hz", "144hz", "120hz", "119.97hz", "60hz", "59.97hz", "24hz"
+                "240hz", "144hz", "120hz", "119.97hz", "60hz", "59.94hz", "24hz"
             };
 
             std::vector<std::string> colorSpace = { "HDR", "SDR" };

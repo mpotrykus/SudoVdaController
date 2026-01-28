@@ -2,7 +2,7 @@
 #include "VerbHandlers.h"
 #include "SunshineConfig.h"
 #include "../client/TrayClient.h"
-#include "../controller/VirtualDisplayController.h"
+#include "../controller/VirtualDisplayService.h"
 #include "../utils/StringUtils.h"
 #include "../utils/GuidUtils.h"
 #include "../utils/Logger.h"
@@ -109,8 +109,8 @@ int HandleVerb(const vdc::CliArgs& cli) {
         if (!res.first) {
             auto g = vdc::StringToGuid(cli.args[0]);
             if (!g) { std::cout << "{\"error\":\"invalid guid\"}\n"; return 2; }
-            vdc::VirtualDisplayController local;
-            return local.RemoveDisplay(*g) ? 0 : 1;
+            vdc::VirtualDisplayService service;
+            return service.RemoveVirtualDisplay(*g) ? 0 : 1;
         }
 
         return res.first ? 0 : 1;

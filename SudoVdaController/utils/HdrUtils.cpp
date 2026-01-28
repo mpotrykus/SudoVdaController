@@ -10,9 +10,9 @@
 using namespace vdc;
 using Microsoft::WRL::ComPtr;
 
-// Helper: find adapter LUID and target id for a given GDI device name
+
+
 static bool findDisplayIds(const wchar_t* displayName, LUID& adapterId, uint32_t& targetId) {
-    // Try active paths first (fastest, common case)
     for (int mode = 0; mode < 2; ++mode) {
         const UINT32 flags = (mode == 0) ? QDC_ONLY_ACTIVE_PATHS : QDC_ALL_PATHS;
         UINT32 pathCount = 0, modeCount = 0;
@@ -48,7 +48,38 @@ static bool findDisplayIds(const wchar_t* displayName, LUID& adapterId, uint32_t
     return false;
 }
 
-// Helper: query HDR state for a GDI device name via DXGI (uses IDXGIOutput6 when available)
+bool HdrUtils::DisplaySupportsHDR(const std::wstring& deviceName) {
+    if (deviceName.empty()) {
+        DISPLAY_DEVICEW displayDevice{};
+        displayDevice.cb = sizeof(displayDevice);
+        int idx = 0;
+        while (EnumDisplayDevicesW(NULL, idx++, &displayDevice, 0)) {
+            if (displayDevice.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) {
+                return DisplaySupportsHDR(displayDevice.DeviceName);
+            }
+        }
+        return false;
+    }
+
+    LUID adapterId = {};
+    uint32_t targetId = 0;
+    if (!findDisplayIds(deviceName.c_str(), adapterId, targetId)) {
+        return false;
+    }
+
+    DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO getInfo{};
+    getInfo.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO;
+    getInfo.header.size = sizeof(getInfo);
+    getInfo.header.adapterId = adapterId;
+    getInfo.header.id = targetId;
+
+    if (DisplayConfigGetDeviceInfo(&getInfo.header) == ERROR_SUCCESS) {
+        return getInfo.advancedColorSupported != FALSE;
+    }
+
+    return false;
+}
+
 static bool getDisplayHDRByName(const wchar_t* displayName) {
     ComPtr<IDXGIFactory1> factory;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {

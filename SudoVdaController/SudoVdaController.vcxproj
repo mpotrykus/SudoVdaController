@@ -39,7 +39,6 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="client\TrayServer.cpp" />
     <ClCompile Include="controller\VirtualDisplayService.cpp" />
-    <ClCompile Include="controller\VirtualDisplayController.cpp" />
     <ClCompile Include="utils\Logger.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -68,9 +67,8 @@
     <ClInclude Include="client\TrayServer.h" />
     <ClInclude Include="third_party\sudovda\sudovda-ioctl.h" />
     <ClInclude Include="third_party\sudovda\sudovda.h" />
-    <ClInclude Include="controller\VirtualDisplayService.h" />
     <ClInclude Include="models\VirtualDisplay.h" />
-    <ClInclude Include="controller\VirtualDisplayController.h" />
+    <ClInclude Include="controller\VirtualDisplayService.h" />
     <ClInclude Include="models\VirtualDisplayTypes.h" />
     <ClInclude Include="utils\Logger.h" />
     <ClInclude Include="utils\StringUtils.h" />

@@ -1,7 +1,7 @@
 ﻿#include "../pch.h"
 #include "TrayActions.h"
 
-#include "../controller/VirtualDisplayController.h"
+#include "../controller/VirtualDisplayservice.h"
 #include "../utils/GuidUtils.h"
 #include "../utils/Logger.h"
 #include "../utils/DisplayConfigUtils.h"
@@ -16,6 +16,9 @@
 #include <thread>
 #include <chrono>
 #include "../utils/StringUtils.h"
+#include <sstream>
+#include <iomanip>
+#include <cmath>
 
 namespace vdc {
 
@@ -31,10 +34,16 @@ namespace vdc {
                 return;
             }
 
-            std::wstring cmd = L"\"" + std::wstring(exePath) + L"\" create"
-                L" --width " + std::to_wstring(cfg.width) +
-                L" --height " + std::to_wstring(cfg.height) +
-                L" --refresh " + std::to_wstring(cfg.refreshRateMilliHz);
+            std::wstring cmd = L"\"" + std::wstring(exePath) + L"\" create";
+
+            // Include optional display name as a positional argument (quoted)
+            if (!cfg.deviceName.empty()) {
+                cmd += L" \"" + cfg.deviceName + L"\"";
+            }
+
+            cmd += L" --width " + std::to_wstring(cfg.width) +
+                   L" --height " + std::to_wstring(cfg.height) +
+                   L" --refresh " + std::to_wstring(cfg.refreshRateMilliHz);
 
             if (cfg.hdr)
                 cmd += L" --hdr";
@@ -118,19 +127,24 @@ namespace vdc {
             std::wstring title = mi.physicalLabel;
             std::wstring body;
 
-            auto mode = DisplayConfigUtils::GetCurrentModeForDevice(mi.physicalName);
+            auto mode = DisplayConfigUtils::GetCurrentModeForDevice(mi.gdiName);
             if (mode) {
                 body += L"Resolution: " + std::to_wstring(mode->width) + L"x" +
-                    std::to_wstring(mode->height) + L"\n";
-                body += L"Refresh (mHz): " + std::to_wstring(mode->refreshRateMilliHz) + L"\n";
+                        std::to_wstring(mode->height) + L"\n";
+
+            double refresh = static_cast<double>(mode->refreshRateMilliHz) / 1000.0;
+            double truncated = std::floor(refresh * 100.0) / 100.0;
+            std::wostringstream oss;
+            oss << std::fixed << std::setprecision(2) << truncated;
+            body += L"Refresh: " + oss.str() + L"Hz\n";
+
             }
             else {
                 body += L"Mode: unknown\n";
             }
 
-            bool hdr = HdrUtils::IsHdrEnabled(mi.physicalName);
-            body += L"HDR: ";
-            body += hdr ? L"Enabled" : L"Disabled";
+            bool hdr = HdrUtils::IsHdrEnabled(mi.gdiName);
+            body += hdr ? L"HDR" : L"SDR";
 
             MessageBoxW(hwnd, body.c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
         }
@@ -138,23 +152,23 @@ namespace vdc {
     }
 
     void HandleTrayCommand(HWND hWnd, UINT cmd, TrayContext* ctx) {
-        if (!ctx || !ctx->controller || !ctx->controllerMutex || !ctx->menuMap)
+        if (!ctx || !ctx->service || !ctx->serviceMutex || !ctx->menuMap)
             return;
 
         // Exit
         if (cmd == MENU_EXIT_ID) {
             {
-                std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
-                auto list = ctx->controller->ListDisplays();
+                std::lock_guard<std::mutex> lk(*ctx->serviceMutex);
+                auto list = ctx->service->ListDisplays();
                 for (const auto& p : list)
-                    ctx->controller->RemoveDisplay(p.first);
+                    ctx->service->RemoveVirtualDisplay(p.first);
             }
 
             // Wait for removal
             for (int i = 0; i < 20; ++i) {
                 {
-                    std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
-                    if (ctx->controller->CountDisplays() == 0)
+                    std::lock_guard<std::mutex> lk(*ctx->serviceMutex);
+                    if (ctx->service->CountDisplays() == 0)
                         break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -193,27 +207,27 @@ namespace vdc {
         switch (mi.action) {
 
         case DisplayAction::Remove: {
-            std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
-            ctx->controller->RemoveDisplay(mi.guid);
+            std::lock_guard<std::mutex> lk(*ctx->serviceMutex);
+            ctx->service->RemoveVirtualDisplay(mi.guid);
             break;
         }
 
         case DisplayAction::SetPrimary: {
-            std::lock_guard<std::mutex> lk(*ctx->controllerMutex);
-            ctx->controller->SetPrimary(mi.guid);
+            std::lock_guard<std::mutex> lk(*ctx->serviceMutex);
+            ctx->service->SetPrimary(mi.gdiName);
             break;
         }
 
         case DisplayAction::ToggleHdr: {
-            if (!mi.physicalName.empty()) {
-                bool enabled = HdrUtils::IsHdrEnabled(mi.physicalName);
-                HdrUtils::SetHdrState(mi.physicalName, !enabled);
+            if (!mi.gdiName.empty()) {
+                bool enabled = ctx->service->IsHdrEnabled(mi.gdiName);
+                ctx->service->SetHdr(mi.gdiName, !enabled);
             }
             break;
         }
 
         case DisplayAction::Details: {
-            if (!mi.physicalName.empty())
+            if (!mi.gdiName.empty())
                 ShowPhysicalDetails(hWnd, mi);
             break;
         }

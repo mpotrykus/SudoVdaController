@@ -136,48 +136,48 @@ namespace vdc {
         int labelW = 80, editW = 260, h = 22, gap = 6;
 
         CreateWindowExW(0, L"Static", L"Name:", WS_CHILD | WS_VISIBLE,
-            x, y, labelW, h, st->dlg, nullptr, nullptr, nullptr);
+                        x, y, labelW, h, st->dlg, nullptr, nullptr, nullptr);
 
         st->eName = CreateWindowExW(0, L"Edit", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | WS_TABSTOP,
-            x + labelW, y, editW, h, st->dlg, (HMENU)IDC_NAME, nullptr, nullptr);
+                                    x + labelW, y, editW, h, st->dlg, (HMENU)IDC_NAME, nullptr, nullptr);
 
         y += h + gap;
 
         CreateWindowExW(0, L"Static", L"Width:", WS_CHILD | WS_VISIBLE,
-            x, y, labelW, h, st->dlg, nullptr, nullptr, nullptr);
+                        x, y, labelW, h, st->dlg, nullptr, nullptr, nullptr);
 
         st->eWidth = CreateWindowExW(0, L"Edit", L"1920", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | WS_TABSTOP,
-            x + labelW, y, 100, h, st->dlg, (HMENU)IDC_WIDTH, nullptr, nullptr);
+                                     x + labelW, y, 100, h, st->dlg, (HMENU)IDC_WIDTH, nullptr, nullptr);
 
         CreateWindowExW(0, L"Static", L"Height:", WS_CHILD | WS_VISIBLE,
-            x + labelW + 110, y, 60, h, st->dlg, nullptr, nullptr, nullptr);
+                        x + labelW + 110, y, 60, h, st->dlg, nullptr, nullptr, nullptr);
 
         st->eHeight = CreateWindowExW(0, L"Edit", L"1080", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | WS_TABSTOP,
-            x + labelW + 170, y, 90, h, st->dlg, (HMENU)IDC_HEIGHT, nullptr, nullptr);
+                                      x + labelW + 170, y, 90, h, st->dlg, (HMENU)IDC_HEIGHT, nullptr, nullptr);
 
         y += h + gap;
 
         CreateWindowExW(0, L"Static", L"Refresh:", WS_CHILD | WS_VISIBLE,
-            x, y, labelW, h, st->dlg, nullptr, nullptr, nullptr);
+                        x, y, labelW, h, st->dlg, nullptr, nullptr, nullptr);
 
         st->eRefresh = CreateWindowExW(0, L"Edit", L"60", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT | WS_TABSTOP,
-            x + labelW, y, 100, h, st->dlg, (HMENU)IDC_REFRESH, nullptr, nullptr);
+                                       x + labelW, y, 100, h, st->dlg, (HMENU)IDC_REFRESH, nullptr, nullptr);
 
         st->hdr = CreateWindowExW(0, L"Button", L"HDR",
-            WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
-            x + labelW + 110, y, 80, h,
-            st->dlg, (HMENU)IDC_HDR, nullptr, nullptr);
+                                  WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                                  x + labelW + 110, y, 80, h,
+                                  st->dlg, (HMENU)IDC_HDR, nullptr, nullptr);
 
         // Buttons
         CreateWindowExW(0, L"Button", L"Create",
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
-            W - 200, H - 75, 80, 26,
-            st->dlg, (HMENU)IDC_CREATE, nullptr, nullptr);
+                        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+                        W - 200, H - 75, 80, 26,
+                        st->dlg, (HMENU)IDC_CREATE, nullptr, nullptr);
 
         CreateWindowExW(0, L"Button", L"Cancel",
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
-            W - 110, H - 75, 80, 26,
-            st->dlg, (HMENU)IDC_CANCEL, nullptr, nullptr);
+                        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
+                        W - 110, H - 75, 80, 26,
+                        st->dlg, (HMENU)IDC_CANCEL, nullptr, nullptr);
 
         // Subclass
         SetWindowLongPtrW(st->dlg, GWLP_USERDATA, (LONG_PTR)st);
