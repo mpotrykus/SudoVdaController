@@ -19,6 +19,8 @@ namespace vdc {
     public:
         static void SetLevel(LogLevel level);
         static LogLevel GetLevel();
+        // Initialize the "last run" file (truncate / create). Call once at startup.
+        static void InitLastRunFile();
 
         // Core logging entry point
         static void Log(LogLevel level, const std::string& msg, const char* location = "");

@@ -23,6 +23,9 @@
 using namespace vdc;
 using namespace vdisplay;
 
+static std::wstring MakeUniqueDeviceName(const std::wstring& requested,
+                                         const std::map<GUID, std::unique_ptr<VirtualDisplay>>& virtualDisplays);
+
 VirtualDisplayService::VirtualDisplayService() {
     m_sudoVdaDriver = new SudovdaDriver();
     configStore_ = std::make_unique<ConfigStore>();
@@ -39,7 +42,7 @@ bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, cons
         DisplayConfig displayConfig = FindExistingDisplayConfigOrGenerate(virtualDisplay, guidOpt);
 	    GUID displayId = StringToGuid(displayConfig.displayId).value();
         float fpsHz = static_cast<float>(virtualDisplay.refreshRateMilliHz) / 1000.0f;
-        bool shouldSave = virtualDisplay.deviceName == DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME;
+        bool isDefaultDisplay = virtualDisplay.deviceName != DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME;
 
         if (virtualDisplay.deviceName.empty())
         {
@@ -93,7 +96,9 @@ bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, cons
             }).detach();
         }
 
-        if (configStore_ && shouldSave) {
+        if (!isDefaultDisplay) LOG_WARN("Default display detected. No configuration will be stored.");
+
+        if (configStore_ && isDefaultDisplay) {
             DisplayConfig cfgCopy = displayConfig;
             std::string devNameCopy = WStringToString(virtualDisplay.deviceName);
             std::thread([this, displayId, virtualDisplay = std::move(virtualDisplay), cfgCopy, devNameCopy]() mutable {
@@ -134,14 +139,15 @@ bool VirtualDisplayService::RemoveVirtualDisplay(const GUID& guid) {
             throw std::exception("The virtual display could not be found");
         }
 
-        if (configStore_) {
+        if (configStore_ && virtualDisplay->second->deviceName.find(DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME) == std::wstring::npos) {
             auto displayConfigOpt = configStore_->GetByDisplayId(GuidToString(guid));
             if (displayConfigOpt.has_value()) {
                 auto displayConfig = UpdateConfigTopogology(displayConfigOpt.value(), true);
                 configStore_->SaveDisplayConfig(WStringToString(virtualDisplay->second->deviceName), displayConfig);
             }
             else {
-                LOG_WARN("No virtual display config was found in the store for removed display: %s", GuidToString(guid));
+                auto guidString = GuidToString(guid);
+                LOG_WARN("No virtual display config was found in the store for removed display: %s", guidString.c_str());
             }
         }
 

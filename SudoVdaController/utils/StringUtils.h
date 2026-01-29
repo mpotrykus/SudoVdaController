@@ -49,12 +49,12 @@ namespace vdc {
         return oss.str();
     }
 
-    static std::string TrimWhitespace(std::wstring& s) {
+    static void TrimWhitespace(std::wstring& s) {
         const std::wstring ws = L" \t\n\r\f\v";
         const auto start = s.find_first_not_of(ws);
         if (start == std::wstring::npos) { s.clear(); return; }
         const auto end = s.find_last_not_of(ws);
         s = s.substr(start, end - start + 1);
-    };
+    }
 
 } // namespace vdc

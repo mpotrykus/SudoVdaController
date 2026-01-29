@@ -41,7 +41,7 @@ namespace vdc {
     private:
         SudovdaDriver* m_sudoVdaDriver;
 
-		std::unique_ptr<VirtualDisplayService> virtualDisplayService_;
+        std::unique_ptr<VirtualDisplayService> virtualDisplayService_;
         std::map<GUID, std::unique_ptr<VirtualDisplay>> virtualDisplays_;
         std::unique_ptr<ConfigStore> configStore_;
 

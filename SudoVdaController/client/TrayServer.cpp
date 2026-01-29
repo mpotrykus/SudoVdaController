@@ -29,6 +29,8 @@ namespace vdc {
     int RunTrayServer(const std::wstring& pipeName) {
         LOG_INFO("TrayServer starting...");
 
+        Logger::InitLastRunFile();
+
         VirtualDisplayService service;
         std::mutex serviceMutex;
         std::unordered_map<UINT, MenuItem> menuMap;
