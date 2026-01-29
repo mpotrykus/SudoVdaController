@@ -30,61 +30,32 @@ VirtualDisplayService::VirtualDisplayService() {
 
 VirtualDisplayService::~VirtualDisplayService() = default;
 
-static std::wstring MakeUniqueDeviceName(const std::wstring& requested,
-                                         const std::map<GUID, std::unique_ptr<VirtualDisplay>>& virtualDisplays)
-{
-    auto nameExists = [&](const std::wstring& name) {
-        for (const auto& vd : virtualDisplays) {
-            if (vd.second->deviceName == name) return true;
-        }
-        return false;
-    };
-
-    std::wstring originalName = requested;
-    std::wstring candidateName = originalName;
-
-    std::wregex reSuffix(L"^(.*)_(\\d+)$");
-    std::wstring baseName = originalName;
-    int suffix = 1;
-    std::wsmatch match;
-    if (std::regex_match(originalName, match, reSuffix) && match.size() == 3) {
-        baseName = match[1].str();
-        try {
-            suffix = std::stoi(match[2].str()) + 1;
-        } catch (...) {
-            suffix = 1;
-        }
-    }
-
-    while (nameExists(candidateName)) {
-        candidateName = baseName + L"_" + std::to_wstring(suffix);
-        ++suffix;
-    }
-
-    return candidateName;
-}
-
 bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, const std::optional<GUID>& guidOpt) {
 
     try {
         VirtualDisplay virtualDisplay = cfg;
-	    DisplayConfig displayConfig = FindExistingDisplayConfigOrGenerate(virtualDisplay, guidOpt);
+        TrimWhitespace(virtualDisplay.deviceName);
+
+        DisplayConfig displayConfig = FindExistingDisplayConfigOrGenerate(virtualDisplay, guidOpt);
 	    GUID displayId = StringToGuid(displayConfig.displayId).value();
         float fpsHz = static_cast<float>(virtualDisplay.refreshRateMilliHz) / 1000.0f;
+        bool shouldSave = virtualDisplay.deviceName == DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME;
 
-        // Ensure the device name is unique among existing virtual displays.
+        if (virtualDisplay.deviceName.empty())
+        {
+            throw std::exception("Device name cannot be empty");
+        }
+
         std::wstring newName = MakeUniqueDeviceName(virtualDisplay.deviceName, virtualDisplays_);
         if (newName != virtualDisplay.deviceName) {
             std::string oldNameStr = WStringToString(virtualDisplay.deviceName);
             std::string newNameStr = WStringToString(newName);
-            LOG_INFO("A virtual display with the name '%s' already exists. Renamed to '%s'", oldNameStr.c_str(), newNameStr.c_str());
+            LOG_WARN("A virtual display with the name '%s' already exists. Renamed to '%s'", oldNameStr.c_str(), newNameStr.c_str());
             virtualDisplay.deviceName = newName;
         }
 
-        auto deviceName = WStringToString(virtualDisplay.deviceName);
-
-        auto gdiName = m_sudoVdaDriver->CreateVirtualDisplay(GuidToString(displayId).c_str(), 
-                                                             deviceName.c_str(),
+        auto gdiName = m_sudoVdaDriver->CreateVirtualDisplay(displayConfig.displayId.c_str(), 
+                                                             WStringToString(virtualDisplay.deviceName).c_str(),
                                                              virtualDisplay.width, virtualDisplay.height, fpsHz, 
                                                              displayId);
 
@@ -122,7 +93,7 @@ bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, cons
             }).detach();
         }
 
-        if (configStore_ && virtualDisplay.deviceName != DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME) {
+        if (configStore_ && shouldSave) {
             DisplayConfig cfgCopy = displayConfig;
             std::string devNameCopy = WStringToString(virtualDisplay.deviceName);
             std::thread([this, displayId, virtualDisplay = std::move(virtualDisplay), cfgCopy, devNameCopy]() mutable {
@@ -138,7 +109,7 @@ bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, cons
             }).detach();
         }
 
-        std::string createdName = WStringToString(cfg.deviceName);
+        std::string createdName = WStringToString(virtualDisplay.deviceName);
         std::string createdGdi = WStringToString(gdiNameResult);
         std::string createdId = displayConfig.displayId;
         std::string successMsg = "Created '" + createdName + "' (" + createdGdi + ") with id: " + createdId;
@@ -471,4 +442,39 @@ std::vector<vdc::Topology> VirtualDisplayService::GetCurrentTopology(const std::
     vds.reserve(virtualDisplays.size());
     for (const auto& kv : virtualDisplays) vds.push_back({ kv.first, kv.second->gdiName });
     return utils.GetActiveDisplayTopology(vds);
+}
+
+static std::wstring MakeUniqueDeviceName(const std::wstring& requested,
+                                         const std::map<GUID, std::unique_ptr<VirtualDisplay>>& virtualDisplays)
+{
+    auto nameExists = [&](const std::wstring& name) {
+        for (const auto& vd : virtualDisplays) {
+            if (vd.second->deviceName == name) return true;
+        }
+        return false;
+        };
+
+    std::wstring originalName = requested;
+    std::wstring candidateName = originalName;
+
+    std::wregex reSuffix(L"^(.*)_(\\d+)$");
+    std::wstring baseName = originalName;
+    int suffix = 1;
+    std::wsmatch match;
+    if (std::regex_match(originalName, match, reSuffix) && match.size() == 3) {
+        baseName = match[1].str();
+        try {
+            suffix = std::stoi(match[2].str()) + 1;
+        }
+        catch (...) {
+            suffix = 1;
+        }
+    }
+
+    while (nameExists(candidateName)) {
+        candidateName = baseName + L"_" + std::to_wstring(suffix);
+        ++suffix;
+    }
+
+    return candidateName;
 }
