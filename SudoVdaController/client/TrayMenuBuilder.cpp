@@ -19,16 +19,8 @@ namespace vdc {
         constexpr UINT MENU_EXIT_ID = 1001;
         constexpr UINT MENU_CLEAR_CONFIG_ID = 1999;
 
-        static std::wstring ExtractGdiName(const std::wstring& label) {
-            size_t l = label.rfind(L'(');
-            size_t r = label.rfind(L')');
-            if (l != std::wstring::npos && r != std::wstring::npos && r > l)
-                return label.substr(l + 1, r - l - 1);
-            return L"";
-        }
-
-    } // anonymous namespace
-
+    }
+        
     // -----------------------------------------------------------------------------
     // Build and show the tray popup menu
     // -----------------------------------------------------------------------------
@@ -42,7 +34,7 @@ namespace vdc {
 
         std::lock_guard<std::mutex> lk(*ctx->serviceMutex);
 
-        auto list = ctx->service->ListDisplays();
+        auto list = ctx->service->GetCurrentTopology();
         ctx->menuMap->clear();
 
         UINT id = MENU_BASE_ID;
@@ -51,88 +43,98 @@ namespace vdc {
         // Build per‑display submenus
         // -------------------------------------------------------------------------
         for (const auto& p : list) {
-            const GUID& guid = p.first;
-            const std::wstring& label = p.second;
-
+            GUID guid = StringToGuid(p.displayId).value_or(GUID());
+            const std::wstring& edid = StringToWString(p.edid);
+            bool isEnabled = ctx->service->IsDisplayEnabled(WStringToString(edid));
             bool isPhysical = (guid == GUID());
-            const std::wstring gdiName = ExtractGdiName(label);
+            const std::wstring gdiName = StringToWString(p.gdiName);
+            std::wstring label = StringToWString(p.displayName);
+            if (isEnabled && !gdiName.empty()) label += L" (" + gdiName + L")";
+
 
             HMENU hSub = CreatePopupMenu();
             if (!hSub) continue;
 
             // Set Primary
-            {
-                AppendMenuW(hSub, MF_STRING, id, L"Set Primary");
-                MenuItem mi{};
-                mi.guid = guid;
-                mi.action = DisplayAction::SetPrimary;
+            if (isEnabled) {
+                {
+                    AppendMenuW(hSub, MF_STRING, id, L"Set Primary");
+                    TrayMenuItem mi{};
+                    mi.guid = guid;
+                    mi.edid = edid;
+                    mi.action = DisplayAction::SetPrimary;
 
-                if (isPhysical) {
+                    if (isPhysical) {
+                        mi.gdiName = gdiName;
+                        mi.label = label;
+                    }
+
+                    ctx->menuMap->emplace(id, mi);
+                    ++id;
+                }
+
+                // Toggle HDR
+                if (ctx->service->DisplaySupportsHdr(gdiName)) {
+                    TrayMenuItem mi{};
+                    mi.guid = guid;
+                    mi.edid = edid;
+
+                    if (isPhysical) {
+                        mi.gdiName = gdiName;
+                        mi.label = label;
+                    }
+
+                    if (ctx->service->IsHdrEnabled(gdiName)) {
+                        AppendMenuW(hSub, MF_STRING, id, L"Disable HDR");
+                        mi.action = DisplayAction::ToggleHdr;
+                    }
+                    else {
+                        AppendMenuW(hSub, MF_STRING, id, L"Enable HDR");
+                        mi.action = DisplayAction::ToggleHdr;
+                    }
+
+                    ctx->menuMap->emplace(id, mi);
+                    ++id;
+                }
+
+                AppendMenuW(hSub, MF_SEPARATOR, 0, nullptr);
+
+                // Details
+                {
+                    AppendMenuW(hSub, MF_STRING, id, L"Details");
+                    TrayMenuItem mi{};
+                    mi.guid = guid;
+                    mi.edid = edid;
+                    mi.action = DisplayAction::Details;
+
                     mi.gdiName = gdiName;
-                    mi.physicalLabel = label;
+                    mi.label = label;
+
+                    ctx->menuMap->emplace(id, mi);
+                    ++id;
                 }
-
-                ctx->menuMap->emplace(id, mi);
-                ++id;
-            }
-
-            // Toggle HDR
-            if (ctx->service->DisplaySupportsHdr(gdiName)) {
-                MenuItem mi{};
-                mi.guid = guid;
-
-                if (isPhysical) {
-                    mi.gdiName = gdiName;
-                    mi.physicalLabel = label;
-                }
-
-                if (ctx->service->IsHdrEnabled(gdiName)) {
-                    AppendMenuW(hSub, MF_STRING, id, L"Disable HDR");
-                    mi.action = DisplayAction::ToggleHdr;
-                }
-                else {
-                    AppendMenuW(hSub, MF_STRING, id, L"Enable HDR");
-                    mi.action = DisplayAction::ToggleHdr;
-                }
-
-                ctx->menuMap->emplace(id, mi);
-                ++id;
-            }
-
-            AppendMenuW(hSub, MF_SEPARATOR, 0, nullptr);
-
-            // Details
-            {
-                AppendMenuW(hSub, MF_STRING, id, L"Details");
-                MenuItem mi{};
-                mi.guid = guid;
-                mi.action = DisplayAction::Details;
-
-                mi.gdiName = gdiName;
-                mi.physicalLabel = label;
-
-                ctx->menuMap->emplace(id, mi);
-                ++id;
             }
 
             // Remove (virtual only)
             if (!isPhysical) {
                 AppendMenuW(hSub, MF_STRING, id, L"Remove");
-                ctx->menuMap->emplace(id, MenuItem{ guid, DisplayAction::Remove });
+                ctx->menuMap->emplace(id, TrayMenuItem{ guid, DisplayAction::Remove });
                 ++id;
-            } else {
-                MenuItem mi{};
+            }
+            else {
+                TrayMenuItem mi{};
 
                 mi.guid = guid;
+                mi.edid = edid;
                 mi.gdiName = gdiName;
-                mi.physicalLabel = label;
+                mi.label = label;
 
-                if (ctx->service->IsDisplayEnabled(gdiName)) {
-                    AppendMenuW(hSub, MF_STRING, id, L"Disable");
+                if (!ctx->service->IsDisplayEnabled(WStringToString(edid))) {
+                    AppendMenuW(hSub, MF_STRING, id, L"Enable");
                     mi.action = DisplayAction::ToggleEnable;
                 }
-                else {
-                    AppendMenuW(hSub, MF_STRING, id, L"Enable");
+                else if (list.size() > 1) {
+                    AppendMenuW(hSub, MF_STRING, id, L"Disable");
                     mi.action = DisplayAction::ToggleEnable;
                 }
 
@@ -206,7 +208,7 @@ namespace vdc {
 
                         cfg.hdr = (cs == "HDR");
 
-                        ctx->menuMap->emplace(id, MenuItem{ GUID(), DisplayAction::Add, cfg });
+                        ctx->menuMap->emplace(id, TrayMenuItem{ GUID(), DisplayAction::Add, cfg });
                         ++id;
                     }
 
@@ -219,7 +221,7 @@ namespace vdc {
             // Custom option
             AppendMenuW(hAddRoot, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(hAddRoot, MF_STRING, id, L"Custom");
-            ctx->menuMap->emplace(id, MenuItem{ GUID(), DisplayAction::Custom });
+            ctx->menuMap->emplace(id, TrayMenuItem{ GUID(), DisplayAction::Custom });
             ++id;
 
             AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hAddRoot, L"Add display");

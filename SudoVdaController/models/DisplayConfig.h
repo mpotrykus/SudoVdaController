@@ -9,6 +9,7 @@ namespace vdc {
     struct Topology {
         std::string displayId;
         std::string displayName;
+        std::string gdiName;
         std::string edid;
         bool enabled = false;
 

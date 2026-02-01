@@ -4,7 +4,7 @@
 
 namespace vdc {
 
-	const std::wstring DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME = L"SudoMakerVDD";
+	const std::wstring DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME = L"Virtual Display";
 
     struct VirtualDisplay {
         std::wstring deviceName = DEFAULT_VIRTUAL_DISPLAY_DEVICE_NAME;

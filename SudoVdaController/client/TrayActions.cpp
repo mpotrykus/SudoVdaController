@@ -123,8 +123,8 @@ namespace vdc {
             }
         }
 
-        static void ShowPhysicalDetails(HWND hwnd, const MenuItem& mi) {
-            std::wstring title = mi.physicalLabel;
+        static void ShowPhysicalDetails(HWND hwnd, const TrayMenuItem& mi) {
+            std::wstring title = mi.label;
             std::wstring body;
 
             auto mode = DisplayConfigUtils::GetCurrentModeForDevice(mi.gdiName);
@@ -159,7 +159,7 @@ namespace vdc {
         if (cmd == MENU_EXIT_ID) {
             {
                 std::lock_guard<std::mutex> lk(*ctx->serviceMutex);
-                auto list = ctx->service->ListDisplays();
+                auto list = ctx->service->GetVirtualDisplays();
                 for (const auto& p : list)
                     ctx->service->RemoveVirtualDisplay(p.first);
             }
@@ -199,7 +199,7 @@ namespace vdc {
         if (it == ctx->menuMap->end())
             return;
 
-        MenuItem mi = it->second;
+        TrayMenuItem mi = it->second;
 
         // -------------------------------------------------------------------------
         // Action dispatch
@@ -227,9 +227,10 @@ namespace vdc {
         }
 
         case DisplayAction::ToggleEnable: {
-            if (!mi.gdiName.empty()) {
-                bool enabled = ctx->service->IsDisplayEnabled(mi.gdiName);
-                ctx->service->SetDisplayEnabled(mi.gdiName, !enabled);
+            if (!mi.edid.empty()) {
+				auto edid = WStringToString(mi.edid);
+                bool enabled = ctx->service->IsDisplayEnabled(edid);
+                ctx->service->SetDisplayEnabled(edid, !enabled);
             }
             break;
         }

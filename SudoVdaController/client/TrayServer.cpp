@@ -33,7 +33,7 @@ namespace vdc {
 
         VirtualDisplayService service;
         std::mutex serviceMutex;
-        std::unordered_map<UINT, MenuItem> menuMap;
+        std::unordered_map<UINT, TrayMenuItem> menuMap;
 
         g_ctx.service = &service;
         g_ctx.serviceMutex = &serviceMutex;

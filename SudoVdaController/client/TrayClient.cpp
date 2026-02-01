@@ -92,6 +92,9 @@ bool SendToTray(const std::string& message, std::string& outResponse) {
     if (h == INVALID_HANDLE_VALUE)
         return false;
 
+	auto msg = "Sending to tray: " + message;
+    LOG_INFO(msg.c_str());
+
     DWORD written = 0;
     BOOL ok = WriteFile(h, message.c_str(),
         (DWORD)message.size(), &written, NULL);

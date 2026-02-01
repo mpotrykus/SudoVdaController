@@ -101,11 +101,15 @@
     <ClInclude Include="controller\displayconfig\DisplayGeometry.h" />
     <ClInclude Include="controller\displayconfig\DisplayLayout.h" />
     <ClInclude Include="controller\displayconfig\DisplayTopology.h" />
+    <ClInclude Include="models\TrayMenuItem.h" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="assets\svc.ico" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="logs.txt" />
   </ItemGroup>
 </Project>

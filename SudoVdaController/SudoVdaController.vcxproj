@@ -54,6 +54,7 @@
     <ClInclude Include="controller\displayconfig\DisplayLayout.h" />
     <ClInclude Include="controller\displayconfig\DisplayTopology.h" />
     <ClInclude Include="controller\driver\SudoVdaDriver.h" />
+    <ClInclude Include="models\TrayMenuItem.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="models\DisplayConfig.h" />
     <ClInclude Include="utils\ConfigStore.h" />
@@ -78,6 +79,9 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="resources.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="logs.txt" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>

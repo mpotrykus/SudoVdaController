@@ -10,6 +10,15 @@
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
 
+// Force MSVC STL to avoid using experimental/incomplete C++20 allocation
+// helpers like `std::construct_at` on toolsets where they may be missing.
+// Setting _HAS_CXX20 to 0 makes the headers use the fallback placement-new
+// paths which are compatible with this codebase and older toolsets.
+#ifndef _HAS_CXX20
+#define _HAS_CXX20 0
+#endif
+
+
 // Reduce Windows header bloat
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
