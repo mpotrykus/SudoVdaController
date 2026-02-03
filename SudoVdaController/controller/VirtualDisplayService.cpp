@@ -73,9 +73,10 @@ bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, cons
         virtualDisplays_.emplace(displayId, session);
 
         if (cfg.hdr) {
+
             std::string devNameCopy = WStringToString(virtualDisplay.deviceName);
-            // capture shared_ptr to keep object alive while thread runs
             auto virtualDisplayShared = session;
+
             std::thread([this, gdiNameResult, devNameCopy, virtualDisplayShared]() {
                 auto res = SetHdr(gdiNameResult, true);
                 if (res) {
@@ -87,9 +88,12 @@ bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, cons
         }
 
         if (cfg.primary) {
+
             std::string devNameCopy = WStringToString(virtualDisplay.deviceName);
             auto virtualDisplayShared = session;
+
             std::thread([this, gdiNameResult, devNameCopy, virtualDisplayShared]() {
+
                 auto res = SetPrimary(gdiNameResult);
                 if (res) {
                     LOG_INFO("Succesfully set '%s' as primary device", devNameCopy);
@@ -102,10 +106,11 @@ bool VirtualDisplayService::CreateVirtualDisplay(const VirtualDisplay& cfg, cons
         if (isDefaultDisplay) LOG_WARN("Default display detected. No configuration will be stored.");
 
         if (configStore_ && !isDefaultDisplay) {
+
             DisplayConfig cfgCopy = displayConfig;
             std::string devNameCopy = WStringToString(virtualDisplay.deviceName);
-            // copy the shared_ptr into the thread lambda to extend lifetime
             auto virtualDisplayShared = session;
+
             std::thread([this, displayId, virtualDisplayShared, cfgCopy, devNameCopy]() mutable {
                 Sleep(5000);
                 auto res = AddNewDisplayToConfigStore(displayId, *virtualDisplayShared, cfgCopy);
@@ -353,30 +358,15 @@ bool VirtualDisplayService::AddNewDisplayToConfigStore(GUID displayId,
     }
 
     // Merge topology of display with global topology
-    std::map<std::string, bool> topologyMap;
+    displayConfig = UpdateConfigTopogology(displayConfig, false);
     auto requestedTopology = configStore_->GetCombinedTopology(&displayConfig,
                                                                configStore_->GetTopologyMergePolicyDisabledWins());
-
-    if (requestedTopology.empty()) {
-        LOG_ERROR("Combined topology returned empty");
-        return false;
-    }
-
-    /*std::vector<Topology> testTopo;
-    Topology t;
-    t.displayName = "Cintiq21UX (Test)";
-    t.enabled = false;
-    t.edid = "00ffffffffffff005c23141034353830221001030e2b20ffaae696a3544a99260f4f54bfef008180a940315945596159819901010101483f403062b0324040c01300b0441100001e000000fd0038551f5c11000a202020202020000000ff0036484350303038353420202020000000fc0043696e746971323155580a202000b4";
-	testTopo.push_back(t);
-
-    requestedTopology = testTopo;*/
 
     LOG_INFO("Applying topology:");
     for (const auto& t : requestedTopology) {
         std::string message = "  (" + std::string(t.enabled ? "+" : " ") + ") " + t.displayName;
         LOG_INFO(message.c_str());
     }
-
 
     if (!vdc::DisplayConfigUtils().ApplyDisplayConfig(requestedTopology)) {
         LOG_ERROR("Failed to apply merged topology from config store");
@@ -385,7 +375,6 @@ bool VirtualDisplayService::AddNewDisplayToConfigStore(GUID displayId,
 
     LOG_INFO("Succesfully applied merged topology from config store");
     displayConfig.topology = requestedTopology;
-    displayConfig = UpdateConfigTopogology(displayConfig, false);
     
     if (!configStore_->SaveDisplayConfig(WStringToString(virtualDisplay.deviceName), displayConfig)) {
         LOG_ERROR("Failed to save display config to store");
@@ -418,7 +407,7 @@ DisplayConfig VirtualDisplayService::UpdateConfigTopogology(DisplayConfig displa
 {
     auto physicalTopologies = GetCurrentTopology();
     for (const auto& phys : physicalTopologies) {
-        auto match = vdc::FindByKey(displayConfig.topology, phys.displayId, [](const Topology& t) { return t.displayId; });
+        auto match = vdc::FindByKey(displayConfig.topology, phys.edid, [](const Topology& t) { return t.edid; });
         if (match != displayConfig.topology.end()) {
             if (overrideEnabled) {
                 match->enabled = phys.enabled;

@@ -109,7 +109,4 @@
   <ItemGroup>
     <ResourceCompile Include="resources.rc" />
   </ItemGroup>
-  <ItemGroup>
-    <Text Include="logs.txt" />
-  </ItemGroup>
 </Project>

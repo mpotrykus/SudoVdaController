@@ -5,6 +5,7 @@
 #include "../utils/GuidUtils.h"
 #include "../models/VirtualDisplay.h"
 #include "../controller/VirtualDisplayService.h"
+#include "TrayMenuBuilder.h"
 
 #include <windows.h>
 #include <string>
@@ -275,10 +276,16 @@ namespace vdc {
                 }
 
                 else if (verb == "exit") {
-                    response = "{\"ok\":1}";
+                    response = "Closing...";
                     WriteAllToPipe(hPipe, response);
                     CloseHandle(hPipe);
-                    PostQuitMessage(0);
+                    extern TrayContext g_ctx;
+                    if (g_ctx.hwnd) {
+                        PostMessageW(g_ctx.hwnd, WM_CLOSE, 0, 0);
+                    }
+                    else {
+                        PostQuitMessage(0);
+                    }
                     return;
                 }
             }

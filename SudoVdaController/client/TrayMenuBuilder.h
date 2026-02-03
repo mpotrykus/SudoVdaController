@@ -16,6 +16,7 @@ namespace vdc {
         std::mutex* serviceMutex = nullptr;
         std::unordered_map<UINT, TrayMenuItem>* menuMap = nullptr;
         std::wstring pipeName;
+        HWND hwnd = nullptr;
     };
 
     // Builds and shows the tray popup menu

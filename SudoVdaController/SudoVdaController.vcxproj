@@ -80,9 +80,6 @@
   <ItemGroup>
     <ResourceCompile Include="resources.rc" />
   </ItemGroup>
-  <ItemGroup>
-    <Text Include="logs.txt" />
-  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>

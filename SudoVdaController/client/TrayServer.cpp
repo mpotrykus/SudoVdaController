@@ -39,6 +39,7 @@ namespace vdc {
         g_ctx.serviceMutex = &serviceMutex;
         g_ctx.menuMap = &menuMap;
         g_ctx.pipeName = pipeName;
+        g_ctx.hwnd = nullptr;
 
         g_running.store(true);
 
@@ -48,6 +49,9 @@ namespace vdc {
             LOG_ERROR("Failed to create tray window.");
             return 1;
         }
+
+        // store hwnd in global context for other threads
+        g_ctx.hwnd = hWnd;
 
         // Start pipe listener thread for CLI <-> tray communication
         std::thread pipeThread([&]() {
